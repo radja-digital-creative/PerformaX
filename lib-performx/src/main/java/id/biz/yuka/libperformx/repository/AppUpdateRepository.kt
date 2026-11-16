@@ -13,7 +13,9 @@ import io.github.jan.supabase.storage.storage
 import io.ktor.client.call.body
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
-import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
+import kotlinx.coroutines.ensureActive
 import io.ktor.client.request.header
 
 class AppUpdateRepository {
@@ -71,28 +73,51 @@ class AppUpdateRepository {
         }
     }
 
-    /** 3. DOWNLOAD APK DARI STORAGE (Untuk proses pembaruan) */
-    suspend fun downloadApk(apkUrl: String): ResultState<ByteArray> {
-        return safeSupabaseCall {
-            // Buat client baru yang 'bersih' khusus untuk download file besar
+    /** Stream to disk: avoids keeping an entire APK in memory on slow connections. */
+    suspend fun downloadApk(apkUrl: String, destination: java.io.File,
+                            onProgress: suspend (Long, Long) -> Unit): ResultState<java.io.File> = safeSupabaseCall {
+        require(java.net.URI(apkUrl).scheme == "https") { "Alamat pembaruan harus HTTPS." }
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             val client = io.ktor.client.HttpClient {
+                expectSuccess = true
                 install(HttpTimeout)
             }
-
             try {
-                val response = client.get(apkUrl) {
-                    // Beri waktu 10 menit untuk download file besar
-                    timeout { 
-                        requestTimeoutMillis = 600_000 
-                        connectTimeoutMillis = 30_000
+                client.prepareGet(apkUrl) {
+                    timeout {
+                        requestTimeoutMillis = 600_000
+                        connectTimeoutMillis = 15_000
+                        socketTimeoutMillis = 30_000
                     }
-                    // Identitas sebagai mobile browser agar tidak diblokir Cloudflare
-                    header("User-Agent", "Mozilla/5.0 (Android 10; Mobile; rv:114.0) Gecko/114.0 Firefox/114.0")
+                }.execute { response ->
+                    val expected = response.headers["Content-Length"]?.toLongOrNull() ?: -1L
+                    var received = 0L
+                    var lastReported = 0L
+                    destination.outputStream().buffered().use { output ->
+                        val channel = response.bodyAsChannel()
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                            val count = channel.readAvailable(buffer, 0, buffer.size)
+                            if (count == -1) break
+                            if (count == 0) continue
+                            output.write(buffer, 0, count)
+                            received += count
+                            val now = System.nanoTime()
+                            if (now - lastReported > 200_000_000L) {
+                                onProgress(received, expected)
+                                lastReported = now
+                            }
+                        }
+                    }
+                    require(received > 0 && (expected < 0 || received == expected)) { "Unduhan belum lengkap. Silakan coba lagi." }
+                    onProgress(received, expected)
                 }
-                response.body<ByteArray>()
-            } finally {
-                client.close() // Tutup client setelah selesai agar tidak memory leak
-            }
+                destination
+            } catch (e: Exception) {
+                destination.delete()
+                throw e
+            } finally { client.close() }
         }
     }
 }

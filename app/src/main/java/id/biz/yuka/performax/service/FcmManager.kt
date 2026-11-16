@@ -33,8 +33,10 @@ class FcmManager {
 
                 // Simpan ke Supabase
                 SupabaseConfig.client.from(tableName).upsert(tokenData)
-                Log.d("FCM_MANAGER", "Token berhasil disinkronisasi: $token")
+                Log.d("FCM_MANAGER", "Token berhasil disinkronisasi")
 
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("FCM_MANAGER", "Gagal sinkronisasi token: ${e.message}")
             }
@@ -56,6 +58,8 @@ class FcmManager {
                 fcm.deleteToken().await()
                 Log.d("FCM_MANAGER", "Token berhasil dihapus saat logout")
 
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("FCM_MANAGER", "Gagal hapus token: ${e.message}")
             }

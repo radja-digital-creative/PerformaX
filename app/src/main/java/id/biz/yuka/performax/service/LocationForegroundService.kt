@@ -1,6 +1,8 @@
 package id.biz.yuka.performax.service
 
 import android.annotation.SuppressLint
+import id.biz.yuka.performax.utils.fetchFreshLocation
+import kotlinx.coroutines.CancellationException
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
@@ -87,8 +89,8 @@ class LocationForegroundService : Service() {
                 }
 
                 // Ambil lokasi cepat dengan total timeout 15 detik
-                val location = withTimeoutOrNull(15_000L) {
-                    fusedLocationClient.fetchFastLocation(applicationContext)
+                val location = withTimeoutOrNull(28_000L) {
+                    fusedLocationClient.fetchFreshLocation()
                 }
 
                 if (location != null) {
@@ -102,7 +104,8 @@ class LocationForegroundService : Service() {
                 } else {
                     Log.w("LOCATION_SERVICE", "Gagal mendapatkan lokasi (timeout atau semua provider null).")
                 }
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e
+        } catch (e: Exception) {
                 Log.e("LOCATION_SERVICE", "Error di LocationForegroundService: ${e.message}", e)
             } finally {
                 Log.d("LOCATION_SERVICE", "Menghentikan LocationForegroundService...")
@@ -113,85 +116,6 @@ class LocationForegroundService : Service() {
         }
 
         return START_NOT_STICKY
-    }
-
-    @SuppressLint("MissingPermission")
-    private suspend fun FusedLocationProviderClient.fetchFastLocation(context: Context): Location? {
-        return try {
-            // Step 1: Check lastLocation cache (~5ms)
-            val lastLoc = try { lastLocation.await() } catch (_: Exception) { null }
-            if (lastLoc != null) {
-                Log.d("LOCATION_SERVICE", "Lokasi cepat didapat dari lastLocation: lat=${lastLoc.latitude}, lng=${lastLoc.longitude}")
-                return lastLoc
-            }
-
-            // Step 2: getCurrentLocation() — API one-shot yang paling reliable
-            Log.d("LOCATION_SERVICE", "lastLocation null, mencoba getCurrentLocation(HIGH_ACCURACY)...")
-            val cts = CancellationTokenSource()
-            val currentLoc = try {
-                val request = CurrentLocationRequest.Builder()
-                    .setPriority(Priority.PRIORITY_HIGH_ACCURACY)
-                    .setDurationMillis(10_000L)
-                    .setMaxUpdateAgeMillis(5_000L)
-                    .build()
-                getCurrentLocation(request, cts.token).await()
-            } catch (e: Exception) {
-                Log.w("LOCATION_SERVICE", "getCurrentLocation HIGH_ACCURACY gagal: ${e.message}")
-                null
-            }
-            if (currentLoc != null) {
-                Log.d("LOCATION_SERVICE", "Lokasi didapat dari getCurrentLocation: lat=${currentLoc.latitude}, lng=${currentLoc.longitude}")
-                return currentLoc
-            }
-
-            // Step 3: getCurrentLocation() dengan BALANCED_POWER (bisa lebih cepat via cell/wifi)
-            Log.d("LOCATION_SERVICE", "HIGH_ACCURACY gagal, mencoba BALANCED_POWER_ACCURACY...")
-            val cts2 = CancellationTokenSource()
-            val balancedLoc = try {
-                val request = CurrentLocationRequest.Builder()
-                    .setPriority(Priority.PRIORITY_BALANCED_POWER_ACCURACY)
-                    .setDurationMillis(5_000L)
-                    .setMaxUpdateAgeMillis(30_000L)
-                    .build()
-                getCurrentLocation(request, cts2.token).await()
-            } catch (e: Exception) {
-                Log.w("LOCATION_SERVICE", "getCurrentLocation BALANCED gagal: ${e.message}")
-                null
-            }
-            if (balancedLoc != null) {
-                Log.d("LOCATION_SERVICE", "Lokasi didapat dari getCurrentLocation(BALANCED): lat=${balancedLoc.latitude}, lng=${balancedLoc.longitude}")
-                return balancedLoc
-            }
-
-            // Step 4: LocationManager fallback (NETWORK / GPS / PASSIVE)
-            Log.d("LOCATION_SERVICE", "getCurrentLocation gagal, mencoba LocationManager fallback...")
-            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-            if (locationManager != null) {
-                val netLoc = try { locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) } catch (_: Exception) { null }
-                if (netLoc != null) {
-                    Log.d("LOCATION_SERVICE", "Fallback lokasi dari NETWORK_PROVIDER")
-                    return netLoc
-                }
-
-                val gpsLoc = try { locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER) } catch (_: Exception) { null }
-                if (gpsLoc != null) {
-                    Log.d("LOCATION_SERVICE", "Fallback lokasi dari GPS_PROVIDER")
-                    return gpsLoc
-                }
-
-                val passiveLoc = try { locationManager.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER) } catch (_: Exception) { null }
-                if (passiveLoc != null) {
-                    Log.d("LOCATION_SERVICE", "Fallback lokasi dari PASSIVE_PROVIDER")
-                    return passiveLoc
-                }
-            }
-
-            Log.w("LOCATION_SERVICE", "Semua provider lokasi gagal, return null.")
-            null
-        } catch (e: Exception) {
-            Log.e("LOCATION_SERVICE", "Error fetchFastLocation: ${e.message}", e)
-            null
-        }
     }
 
     override fun onDestroy() {

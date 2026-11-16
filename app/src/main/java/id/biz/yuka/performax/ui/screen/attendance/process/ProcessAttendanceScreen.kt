@@ -391,8 +391,9 @@ private fun CameraAttendanceInterface(
     LaunchedEffect(Unit) {
         hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         hasLocationPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        if (!hasCameraPermission || !hasLocationPermission) {
-            permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.CAMERA))
+        if ((viewModel.requirePhoto && !hasCameraPermission) || !hasLocationPermission) {
+            val permissions = if (viewModel.requirePhoto) arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.CAMERA) else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+            permissionLauncher.launch(permissions)
         }
     }
 
@@ -402,7 +403,11 @@ private fun CameraAttendanceInterface(
             val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2000).build()
             locationCallback = object : LocationCallback() {
                 override fun onLocationResult(result: LocationResult) {
-                    result.lastLocation?.let { viewModel.updateLocation(it.latitude, it.longitude) }
+                    result.lastLocation?.let {
+                        if (id.biz.yuka.performax.utils.AttendancePolicy.isFreshLocation(android.os.SystemClock.elapsedRealtime(), it.elapsedRealtimeNanos / 1_000_000L)) {
+                            viewModel.updateLocation(it.latitude, it.longitude)
+                        }
+                    }
                 }
             }
             if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
@@ -431,7 +436,15 @@ private fun CameraAttendanceInterface(
     Box(modifier = Modifier.fillMaxSize().background(Color.Black).border(4.dp, borderBrush, RectangleShape)) {
         Column(modifier = Modifier.fillMaxSize().navigationBarsPadding()) {
             Box(modifier = Modifier.weight(0.75f).fillMaxWidth()) {
-                if (hasCameraPermission) {
+                if (!viewModel.requirePhoto) {
+                    Column(Modifier.fillMaxSize().padding(top = 140.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                        Text("Absen tanpa foto", color = Color.White, style = MaterialTheme.typography.titleLarge)
+                        Button(onClick = viewModel::submitWithoutPhoto, enabled = viewModel.isLocationReady && !viewModel.isUploadLoading && !viewModel.uploadSuccess) {
+                            Text(if (viewModel.currentAttendanceType == "check_in") "Absen Masuk" else "Absen Pulang")
+                        }
+                        if (!hasLocationPermission) Text("Izinkan lokasi presisi untuk melakukan absen.", color = Color.White)
+                    }
+                } else if (hasCameraPermission) {
                     AndroidView(
                         factory = { ctx ->
                             val pv = PreviewView(ctx).apply { implementationMode = PreviewView.ImplementationMode.COMPATIBLE }

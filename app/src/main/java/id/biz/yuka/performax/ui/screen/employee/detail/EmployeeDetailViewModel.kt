@@ -41,6 +41,7 @@ class EmployeeDetailViewModel @Inject constructor(
     private val salaryRepository: SalaryRepository,
     private val userRepository: UserRepository,
     private val roleRepository: RoleRepository,
+    private val scheduleRepository: id.biz.yuka.libperformx.repository.ScheduleRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -86,6 +87,38 @@ class EmployeeDetailViewModel @Inject constructor(
     // State Multiple Deductions
     var availableDeductions = mutableStateListOf<DeductionComponentEntity>()
     var selectedDeductionIds = mutableStateListOf<String>()
+
+    var attendancePreferences by mutableStateOf<id.biz.yuka.libperformx.entity.EmployeeAttendancePreferences?>(null)
+    var availableShifts by mutableStateOf<List<id.biz.yuka.libperformx.entity.ShiftEntity>>(emptyList())
+    var isSavingAttendance by mutableStateOf(false)
+
+    fun changeAttendancePreferences(value: id.biz.yuka.libperformx.entity.EmployeeAttendancePreferences) {
+        attendancePreferences = value
+    }
+
+    fun saveAttendancePreferences() {
+        val prefs = attendancePreferences ?: return
+        if (!isOwner || isSavingAttendance) return
+        if ((prefs.default_store_id == null) != (prefs.default_shift_id == null)) {
+            errorMessage = "Pilih kantor dan shift default."; return
+        }
+        if (!prefs.allow_any_time && !prefs.max_check_in_time.isNullOrBlank()) {
+            try { java.time.LocalTime.parse(prefs.max_check_in_time) }
+            catch (_: Exception) { errorMessage = "Jam maksimal harus berformat HH:mm."; return }
+        }
+        viewModelScope.launch {
+            isSavingAttendance = true
+            val normalized = prefs.copy(max_check_in_time = if (prefs.allow_any_time) null else prefs.max_check_in_time?.takeIf { it.isNotBlank() })
+            when (val result = employeeRepository.saveAttendancePreferences(normalized)) {
+                is ResultState.Success -> {
+                    successMessage = "Aturan absensi disimpan. Jadwal otomatis berikutnya mengikuti kantor dan hari kerja pilihan."
+                    loadDetail()
+                }
+                is ResultState.Error -> errorMessage = result.message
+            }
+            isSavingAttendance = false
+        }
+    }
 
     init {
         fetchStores()
@@ -168,6 +201,12 @@ class EmployeeDetailViewModel @Inject constructor(
             if (result is ResultState.Success) {
                 employee = result.data
                 populateEditForm(result.data)
+                when (val settings = employeeRepository.getAttendancePreferences(employeeId)) {
+                    is ResultState.Success -> attendancePreferences = settings.data
+                    is ResultState.Error -> { attendancePreferences = null; errorMessage = settings.message }
+                }
+                val shifts = scheduleRepository.getShifts(null)
+                if (shifts is ResultState.Success) availableShifts = shifts.data.filter { it.isActive }
             }
             isLoading = false
         }
@@ -241,6 +280,7 @@ class EmployeeDetailViewModel @Inject constructor(
     }
 
     fun saveChanges() {
+        if (!isOwner) return
         val currentEmp = employee ?: return
         viewModelScope.launch {
             isLoading = true
@@ -280,7 +320,19 @@ class EmployeeDetailViewModel @Inject constructor(
 
             val result = employeeRepository.updateEmployee(request)
             if (result is ResultState.Success) {
-                successMessage = "Data berhasil diperbarui!"
+                val prefs = attendancePreferences
+                val primary = pStores.firstOrNull { it.is_primary }?.store_id
+                if (prefs?.default_store_id != null && primary != null && primary != prefs.default_store_id) {
+                    val shift = availableShifts.firstOrNull { it.storeId == primary }
+                    if (shift == null) {
+                        errorMessage = "Profil disimpan, tetapi kantor baru belum memiliki shift aktif. Atur shift dan simpan aturan absensi."
+                    } else {
+                        when (val saved = employeeRepository.saveAttendancePreferences(prefs.copy(default_store_id = primary, default_shift_id = shift.id))) {
+                            is ResultState.Success -> successMessage = "Profil dan kantor default diperbarui."
+                            is ResultState.Error -> errorMessage = "Profil disimpan, tetapi aturan absensi belum tersimpan: ${saved.message}"
+                        }
+                    }
+                } else successMessage = "Data berhasil diperbarui!"
                 isEditMode = false
                 loadDetail()
             } else if (result is ResultState.Error) {

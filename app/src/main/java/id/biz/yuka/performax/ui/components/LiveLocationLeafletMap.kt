@@ -184,8 +184,11 @@ fun LiveLocationLeafletMap(
                             bounds.extend([d.lat, d.lng]);
                         });
 
-                        if(data.length > 1) map.fitBounds(bounds, {padding: [70, 70]});
-                        else if(data.length === 1) map.setView([data[0].lat, data[0].lng], 16);
+                        if (!window.initialBoundsSet && data.length > 0) {
+                            if(data.length > 1) map.fitBounds(bounds, {padding: [70, 70]});
+                            else map.setView([data[0].lat, data[0].lng], 16);
+                            window.initialBoundsSet = true;
+                        }
                     } catch(e) { console.error("JS Error updateMarkers:", e.message); }
                 }
 
@@ -215,7 +218,7 @@ fun LiveLocationLeafletMap(
     }
 
     LaunchedEffect(markers, isMapLoaded) {
-        if (isMapLoaded && markers.isNotEmpty()) {
+        if (isMapLoaded) {
             try {
                 val json = Json.encodeToString(markers)
                 val b64 = Base64.encodeToString(json.toByteArray(), Base64.NO_WRAP)
@@ -228,7 +231,7 @@ fun LiveLocationLeafletMap(
     }
 
     LaunchedEffect(stores, isShowStores, isMapLoaded) {
-        if (isMapLoaded && stores.isNotEmpty()) {
+        if (isMapLoaded) {
             try {
                 val json = Json.encodeToString(stores)
                 val b64 = Base64.encodeToString(json.toByteArray(), Base64.NO_WRAP)

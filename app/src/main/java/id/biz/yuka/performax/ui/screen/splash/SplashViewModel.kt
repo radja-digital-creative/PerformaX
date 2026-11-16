@@ -51,6 +51,17 @@ class SplashViewModel @Inject constructor(
         private set
 
     private var latestApkUrl: String? = null
+    var releaseDetails by mutableStateOf<id.biz.yuka.libperformx.entity.AppVersionEntity?>(null)
+        private set
+    private var downloadJob: kotlinx.coroutines.Job? = null
+    private var versionCheckJob: kotlinx.coroutines.Job? = null
+    private var navigating = false
+
+    fun skipUpdate() {
+        downloadJob?.cancel()
+        checkSession()
+    }
+
 
     // Deep Linking / Notification Navigation
     private var pendingNotifType: String? = null
@@ -98,22 +109,27 @@ class SplashViewModel @Inject constructor(
     }
 
     fun checkAppVersion(currentVersionCode: Int) {
-        viewModelScope.launch {
+        if (versionCheckJob?.isActive == true || navigating) return
+        versionCheckJob = viewModelScope.launch {
             try {
-                when (val result = appUpdateRepository.getLatestAppVersion()) {
+                val result = id.biz.yuka.performax.update.UpdatePolicy.checkWithin {
+                    appUpdateRepository.getLatestAppVersion()
+                }
+                when (result) {
                     is ResultState.Success -> {
                         val latestVersion = result.data
                         if (latestVersion.versionCode > currentVersionCode) {
+                            releaseDetails = latestVersion
                             latestApkUrl = latestVersion.apkUrl
                             uiState = SplashUIState.UpdateAvailable
                         } else {
                             checkSession()
                         }
                     }
-                    is ResultState.Error -> {
-                        checkSession()
-                    }
+                    is ResultState.Error, null -> checkSession()
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 checkSession()
             }
@@ -128,60 +144,57 @@ class SplashViewModel @Inject constructor(
 
     fun downloadAndSaveApk(context: Context) {
         val url = latestApkUrl ?: return
-
-        viewModelScope.launch {
-            var currentProgress = 0
-            uiState = SplashUIState.Downloading("Menyambungkan ke server...", currentProgress)
-
-            val progressJob = launch {
-                while (currentProgress < 95) {
-                    delay((100..400).random().toLong())
-                    currentProgress += (1..4).random()
-                    if (currentProgress > 95) currentProgress = 95
-                    uiState = SplashUIState.Downloading("Mengunduh pembaruan...", currentProgress)
-                }
-            }
-
-            when (val result = appUpdateRepository.downloadApk(url)) {
-                is ResultState.Success -> {
-                    progressJob.cancel()
-                    try {
-                        uiState = SplashUIState.Downloading("Menyimpan file...", 98)
-
-                        val downloadDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                        if (downloadDir != null && !downloadDir.exists()) downloadDir.mkdirs()
-
-                        val apkFile = File(downloadDir, "performaX_update.apk")
-                        val fos = FileOutputStream(apkFile)
-                        fos.write(result.data)
-                        fos.close()
-
-                        uiState = SplashUIState.Downloading("Selesai!", 100)
-                        delay(500)
-
+        if (downloadJob?.isActive == true) return
+        downloadJob = viewModelScope.launch {
+            uiState = SplashUIState.Downloading("Menyambungkan ke server…", 0)
+            val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.cacheDir
+            val partial = File(directory, "performaX_update.pending.apk")
+            try {
+                when (val result = appUpdateRepository.downloadApk(url, partial) { received, total ->
+                    val progress = if (total > 0) ((received * 100 / total).toInt()).coerceIn(0, 100) else 0
+                    val message = if (total > 0) "Mengunduh pembaruan…" else "Terunduh ${received / 1024} KB"
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { uiState = SplashUIState.Downloading(message, progress) }
+                }) {
+                    is ResultState.Success -> {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            val pm = context.packageManager
+                            val apk = pm.getPackageArchiveInfo(partial.absolutePath, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+                                ?: error("File pembaruan bukan APK yang valid.")
+                            val installed = pm.getPackageInfo(context.packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+                            fun signers(info: android.content.pm.PackageInfo) = info.signingInfo?.apkContentsSigners
+                                ?.map { it.toCharsString() }?.toSet().orEmpty()
+                            require(id.biz.yuka.performax.update.UpdatePolicy.canInstall(
+                                apk.packageName, context.packageName, apk.longVersionCode, installed.longVersionCode,
+                                signers(apk), signers(installed))) {
+                                "Pembaruan tidak cocok dengan aplikasi terpasang. Hubungi admin; jangan hapus aplikasi lama."
+                            }
+                            require(apk.longVersionCode == releaseDetails?.versionCode?.toLong()) { "Versi APK tidak sesuai informasi pembaruan." }
+                        }
+                        val apkFile = File(directory, "performaX_update.apk")
+                        if (apkFile.exists()) apkFile.delete()
+                        check(partial.renameTo(apkFile)) { "Gagal menyimpan APK pembaruan." }
                         uiState = SplashUIState.DownloadComplete(apkFile)
-
-                    } catch (e: Exception) {
-                        uiState = SplashUIState.Error("Gagal menyimpan file: ${e.localizedMessage}")
-                        delay(2000)
-                        checkSession()
                     }
+                    is ResultState.Error -> uiState = SplashUIState.Error("Gagal mengunduh: ${result.message}")
                 }
-                is ResultState.Error -> {
-                    progressJob.cancel()
-                    uiState = SplashUIState.Error("Gagal mengunduh: ${result.message}")
-                    delay(2000)
-                    checkSession()
-                }
-            }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                uiState = SplashUIState.Error(e.message ?: "Pembaruan gagal. Silakan coba lagi.")
+            } finally { partial.delete() }
         }
     }
 
     private fun checkSession() {
+        if (navigating) return
+        navigating = true
         viewModelScope.launch {
             try {
-                SupabaseConfig.client.auth.currentSessionOrNull()
-                delay(1500)
+                kotlinx.coroutines.withTimeoutOrNull(2_000) {
+                    SupabaseConfig.client.auth.sessionStatus.first {
+                        it !is io.github.jan.supabase.gotrue.SessionStatus.LoadingFromStorage
+                    }
+                }
                 val isLoggedIn = sessionManager.isLoggedIn.first()
                 val supabaseSession = SupabaseConfig.client.auth.currentSessionOrNull()
 

@@ -50,6 +50,8 @@ class LocationRefreshHelper {
 
                 Log.d("LocationRefreshHelper", "Berhasil kirim request lokasi ke user $userId")
                 ResultState.Success(Unit)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("LocationRefreshHelper", "Gagal requestSingleLocation: ${e.message}", e)
                 ResultState.Error(e.message ?: "Gagal mengirim permintaan lokasi ke karyawan.")
@@ -85,6 +87,8 @@ class LocationRefreshHelper {
 
                 Log.d("LocationRefreshHelper", "Ping lokasi dikirim ke $successCount dari ${userIds.size} user.")
                 ResultState.Success(successCount)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("LocationRefreshHelper", "Gagal requestAllLocations: ${e.message}", e)
                 ResultState.Error(e.message ?: "Gagal memperbarui lokasi karyawan.")

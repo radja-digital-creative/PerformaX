@@ -15,8 +15,8 @@ android {
         applicationId = "id.biz.yuka.performax"
         minSdk = 29
         targetSdk = 35
-        versionCode = 720
-        versionName = "7.2.0-pxn"
+        versionCode = 722
+        versionName = "7.2.2-pxn"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         splits {

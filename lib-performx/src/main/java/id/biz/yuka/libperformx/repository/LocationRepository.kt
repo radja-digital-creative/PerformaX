@@ -33,7 +33,7 @@ class LocationRepository {
 
             if (userId.isNullOrEmpty()) {
                 Log.e("LOCATION_REPO", "User ID tidak ditemukan (null), tidak dapat menyimpan lokasi ke Supabase.")
-                return@safeSupabaseCall Unit
+                error("Sesi login belum tersedia untuk memperbarui lokasi.")
             }
 
             val request = RecordUserLocationRequest(
@@ -58,7 +58,7 @@ class LocationRepository {
         return safeSupabaseCall {
             // 1. Ambil seluruh data lokasi, diurutkan terbaru dahulu
             val rawLocations = SupabaseConfig.client.postgrest["user_locations"]
-                .select {
+                .select(columns = io.github.jan.supabase.postgrest.query.Columns.raw("user_id,latitude,longitude,recorded_at")) {
                     order("recorded_at", order = io.github.jan.supabase.postgrest.query.Order.DESCENDING)
                 }
                 .decodeList<UserLocationRawResponse>()
@@ -89,7 +89,7 @@ class LocationRepository {
 
             // Ambil data profil karyawan (exclude owner)
             val profiles = SupabaseConfig.client.postgrest["profiles"]
-                .select {
+                .select(columns = io.github.jan.supabase.postgrest.query.Columns.raw("id,role_id,full_name,phone_number,profile_url")) {
                     filter {
                         isIn("id", userIds)
                         if (ownerRole != null) {

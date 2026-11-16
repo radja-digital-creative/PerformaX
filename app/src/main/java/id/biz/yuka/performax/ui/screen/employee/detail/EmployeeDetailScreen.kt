@@ -329,6 +329,10 @@ fun EmployeeDetailScreen(
                     }
                 }
 
+                if (viewModel.isOwner && !viewModel.isEditMode) {
+                    item { EmployeeAttendanceSettings(viewModel) }
+                }
+
                 // ==========================================
                 // 4. KARTU PENEMPATAN TOKO
                 // ==========================================

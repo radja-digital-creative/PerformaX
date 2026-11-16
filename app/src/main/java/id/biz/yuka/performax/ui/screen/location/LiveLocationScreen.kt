@@ -31,6 +31,9 @@ import id.biz.yuka.performax.ui.components.LiveLocationLeafletMap
 import id.biz.yuka.performax.ui.components.LiveLocationMapMarker
 import id.biz.yuka.performax.ui.theme.WonderOrange
 import kotlinx.coroutines.launch
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.compose.ui.platform.LocalLifecycleOwner
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +41,12 @@ fun LiveLocationScreen(
     onBack: () -> Unit,
     viewModel: LiveLocationViewModel = hiltViewModel()
 ) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.refreshWhileVisible()
+        }
+    }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -61,7 +70,7 @@ fun LiveLocationScreen(
         }
     }
 
-    val mapMarkers = remember(locationList) {
+    val mapMarkers = remember(locationList, viewModel.refreshedAt) {
         val filtered = locationList.filter { it.latitude != 0.0 && it.longitude != 0.0 }
         android.util.Log.d("LiveLocationScreen", "Total Karyawan: ${locationList.size}, Valid Lokasi: ${filtered.size}")
         

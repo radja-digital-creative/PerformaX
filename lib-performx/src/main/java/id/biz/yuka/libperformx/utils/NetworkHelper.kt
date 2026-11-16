@@ -6,6 +6,8 @@ suspend fun <T> safeSupabaseCall(apiCall: suspend () -> T): ResultState<T> {
     return try {
         // Jika berhasil, langsung bungkus dengan Success
         ResultState.Success(apiCall())
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
     } catch (e: Exception) {
         // Cetak log lengkap ke Console dengan TAG "SUPABASE"
         Log.e("SUPABASE", "Error detail: ${e.message}", e)

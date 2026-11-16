@@ -44,22 +44,30 @@ class HomeViewModel @Inject constructor(
     private val _logoutSuccess = MutableSharedFlow<Unit>()
     val logoutSuccess = _logoutSuccess.asSharedFlow()
 
+    private var loadJob: kotlinx.coroutines.Job? = null
+    private var optionalJob: kotlinx.coroutines.Job? = null
+
     init { loadGlobalData() }
 
     fun loadGlobalData() {
-        viewModelScope.launch {
+        if (loadJob?.isActive == true) return
+        loadJob = viewModelScope.launch {
             isLoading = true
-            val userId = authRepository.getCurrentUserId()
-            if (userId != null) {
+            try {
+                val userId = authRepository.getCurrentUserId() ?: return@launch
                 val profileRes = userRepository.getUserProfile(userId)
                 if (profileRes is ResultState.Success) {
                     userProfile = profileRes.data
-                    fcmManager.syncTokenToSupabase()
-                    checkPriorityWarnings(userId)
-                    fetchActiveAnnouncements(userId, profileRes.data.role)
+                    // Optional services never hold the profile's loading indicator.
+                    isLoading = false
+                    optionalJob?.cancel()
+                    optionalJob = viewModelScope.launch {
+                        launch { kotlinx.coroutines.withTimeoutOrNull(10_000) { fcmManager.syncTokenToSupabase() } }
+                        launch { kotlinx.coroutines.withTimeoutOrNull(15_000) { checkPriorityWarnings(userId) } }
+                        launch { kotlinx.coroutines.withTimeoutOrNull(15_000) { fetchActiveAnnouncements(userId, profileRes.data.role) } }
+                    }
                 }
-            }
-            isLoading = false
+            } finally { isLoading = false }
         }
     }
 

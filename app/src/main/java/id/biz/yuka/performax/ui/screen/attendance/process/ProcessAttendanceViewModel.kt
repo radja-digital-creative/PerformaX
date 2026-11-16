@@ -24,6 +24,7 @@ import io.github.jan.supabase.gotrue.auth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 import java.io.ByteArrayOutputStream
 import java.time.LocalDate
 import java.time.LocalTime
@@ -44,6 +45,24 @@ class ProcessAttendanceViewModel @Inject constructor(
     private val faceDetectionService: FaceDetectionService,
     private val faceRecognitionService: FaceRecognitionService
 ) : ViewModel() {
+
+    var requirePhoto by mutableStateOf(true)
+        private set
+    var allowAnyTime by mutableStateOf(false)
+        private set
+    var maxCheckInTime: String? = null
+    var isLocationReady by mutableStateOf(false)
+        private set
+    private var locationReceivedAt = 0L
+
+    fun submitWithoutPhoto() {
+        if (requirePhoto || isUploadLoading || uploadSuccess || !isLocationReady) return
+        if (android.os.SystemClock.elapsedRealtime() - locationReceivedAt > 30_000L) {
+            isLocationReady = false
+            globalErrorMessage = "Lokasi sudah kedaluwarsa. Tunggu pembaruan GPS."; return
+        }
+        uploadAttendanceAndProcess(null, false)
+    }
 
     var overlayMessage by mutableStateOf("Memuat data jadwal...")
     var attendanceState by mutableStateOf("LOADING")
@@ -90,6 +109,8 @@ class ProcessAttendanceViewModel @Inject constructor(
     var wasBlinking = false
     @Volatile var isProcessingFrame = false
 
+    private var attendanceLoadJob: kotlinx.coroutines.Job? = null
+
     init {
         loadAttendanceData()
     }
@@ -105,10 +126,15 @@ class ProcessAttendanceViewModel @Inject constructor(
     }
 
     fun loadAttendanceData() {
-        viewModelScope.launch {
+        attendanceLoadJob?.cancel()
+        attendanceLoadJob = viewModelScope.launch {
             attendanceState = "LOADING"
             globalErrorMessage = null
             hasPendingRequestToday = false
+            hasApprovedOffsite = false
+            hasApprovedShiftBypass = false
+            isVerificationStarted = false
+            isLocationReady = false
 
             val userId = SupabaseConfig.client.auth.currentUserOrNull()?.id
             if (userId == null) {
@@ -119,7 +145,15 @@ class ProcessAttendanceViewModel @Inject constructor(
             }
             currentUserId = userId
 
-            when (val empRes = employeeRepository.getEmployeeById(userId)) {
+            val today = LocalDate.now(ZoneId.of("Asia/Jakarta")).toString()
+            // Independent reads share a round trip rather than blocking one another.
+            val employeeRead = async { employeeRepository.getEmployeeById(userId) }
+            val preferencesRead = async { employeeRepository.getAttendancePreferences(userId) }
+            val manualRead = async { attendanceRepository.checkPendingManualAttendance(userId, today) }
+            val extraRead = async { attendanceRepository.checkPendingExtraWorkRequest(userId, today) }
+            val scheduleRead = async { scheduleRepository.getDailyAttendanceSchedule(userId, today) }
+
+            when (val empRes = employeeRead.await()) {
                 is ResultState.Success -> {
                     employeeName = empRes.data.fullName
                     val savedStr = empRes.data.faceEmbedding
@@ -134,11 +168,23 @@ class ProcessAttendanceViewModel @Inject constructor(
                 }
             }
 
-            val today = LocalDate.now().toString()
+            when (val preferences = preferencesRead.await()) {
+                is ResultState.Success -> {
+                    requirePhoto = preferences.data.require_photo
+                    allowAnyTime = preferences.data.allow_any_time
+                    maxCheckInTime = preferences.data.max_check_in_time
+                }
+                is ResultState.Error -> {
+                    attendanceState = "TIME_ERROR"
+                    timeErrorMessage = "Gagal memuat aturan absensi: ${preferences.message}"
+                    return@launch
+                }
+            }
+
 
             // 1. Cek apakah ada pengajuan Absen Manual status 'pending' hari ini
             try {
-                val pendingManualRes = attendanceRepository.checkPendingManualAttendance(userId, today)
+                val pendingManualRes = manualRead.await()
                 if (pendingManualRes is ResultState.Success && pendingManualRes.data != null) {
                     hasPendingRequestToday = true
                     attendanceState = "TIME_ERROR"
@@ -151,7 +197,7 @@ class ProcessAttendanceViewModel @Inject constructor(
 
             // 2. Cek apakah ada pengajuan Masuk Kerja (Extra Work) status 'pending' hari ini
             try {
-                val pendingExtraRes = attendanceRepository.checkPendingExtraWorkRequest(userId, today)
+                val pendingExtraRes = extraRead.await()
                 if (pendingExtraRes is ResultState.Success && pendingExtraRes.data != null) {
                     hasPendingRequestToday = true
                     attendanceState = "TIME_ERROR"
@@ -162,7 +208,7 @@ class ProcessAttendanceViewModel @Inject constructor(
                 Log.e("Absensi", "Gagal cek pending extra work request: ${e.message}")
             }
 
-            when (val scheduleRes = scheduleRepository.getDailyAttendanceSchedule(userId, today)) {
+            when (val scheduleRes = scheduleRead.await()) {
                 is ResultState.Success -> {
                     val schedule = scheduleRes.data
                     if (schedule == null) {
@@ -216,7 +262,7 @@ class ProcessAttendanceViewModel @Inject constructor(
                     val closeTime = parseTimeSafe(storeDetail.closeTime.ifBlank { "23:59:00" })
 
                     val checkInStart = startTime.minusMinutes(openBefore)
-                    val checkInEnd = startTime.plusMinutes(lateTolerance)
+                    val checkInEnd = maxCheckInTime?.let { parseTimeSafe(it) } ?: startTime.plusMinutes(lateTolerance)
                     val checkOutStart = endTime.minusMinutes(lateTolerance)
                     val checkOutMaxTime = endTime.plusMinutes(lateTolerance).plusMinutes(overtimeLimit)
                     val checkOutEnd = if (checkOutMaxTime.isBefore(closeTime)) checkOutMaxTime else closeTime
@@ -226,7 +272,7 @@ class ProcessAttendanceViewModel @Inject constructor(
                     val timeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
                     if (attData == null) {
-                        if (isWithinWindow(currentTime, checkInStart, checkInEnd) || hasApprovedShiftBypass) {
+                        if (id.biz.yuka.performax.utils.AttendancePolicy.canAttend(currentTime, checkInStart, checkInEnd, allowAnyTime) || hasApprovedShiftBypass) {
                             currentAttendanceType = "check_in"
                             attendanceState = "CAMERA"
                             overlayMessage = "Mencari lokasi presisi GPS..."
@@ -240,11 +286,11 @@ class ProcessAttendanceViewModel @Inject constructor(
                             attendanceState = "COMPLETED"
                             return@launch
                         } else {
-                            if (currentTime.isBefore(checkOutStart) && !hasApprovedShiftBypass) {
+                            if (currentTime.isBefore(checkOutStart) && !hasApprovedShiftBypass && !allowAnyTime) {
                                 expectedCheckOutTime = checkOutStart.format(timeFormatter)
                                 attendanceState = "CHECKED_IN_ONLY"
                                 return@launch
-                            } else if (isWithinWindow(currentTime, checkOutStart, checkOutEnd) || hasApprovedShiftBypass) {
+                            } else if (id.biz.yuka.performax.utils.AttendancePolicy.canAttend(currentTime, checkOutStart, checkOutEnd, allowAnyTime) || hasApprovedShiftBypass) {
                                 currentAttendanceType = "check_out"
                                 loadPendingTasks(userId)
                             } else {
@@ -299,11 +345,17 @@ class ProcessAttendanceViewModel @Inject constructor(
         else !current.isBefore(start) || !current.isAfter(end)
 
     fun updateLocation(lat: Double, lng: Double) {
+        locationReceivedAt = android.os.SystemClock.elapsedRealtime()
         userLocation = MapMarker(lat, lng, "Posisi Anda")
         val targetStore = storeLocation
         if (targetStore == null || activeScheduleId == null || attendanceState != "CAMERA" || isUploadLoading || uploadSuccess) return
 
         val distance = calculateDistance(lat, lng, targetStore.lat, targetStore.lng)
+        isLocationReady = distance <= maxRadiusMeters || hasApprovedOffsite
+        if (!requirePhoto) {
+            overlayMessage = if (isLocationReady) "Lokasi siap. Tekan tombol absen." else "Anda di luar radius (${distance.toInt()} m)."
+            return
+        }
         if (!isVerificationStarted || overlayMessage.contains("luar radius") || overlayMessage.contains("Mencari")) {
             if (distance <= maxRadiusMeters || hasApprovedOffsite) {
                 isVerificationStarted = true
@@ -549,7 +601,7 @@ class ProcessAttendanceViewModel @Inject constructor(
         return result
     }
 
-    private fun uploadAttendanceAndProcess(bitmap: Bitmap, isManual: Boolean = false) {
+    private fun uploadAttendanceAndProcess(bitmap: Bitmap?, isManual: Boolean = false) {
         viewModelScope.launch {
             isUploadLoading = true
             try {
@@ -563,11 +615,21 @@ class ProcessAttendanceViewModel @Inject constructor(
                     return@launch
                 }
 
-                val stream = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream)
-                val byteArray = stream.toByteArray()
-
-                val uploadResult = attendanceRepository.uploadAttendanceImage(byteArray, userId)
+                if (requirePhoto && bitmap == null) {
+                    globalErrorMessage = "Foto wajib untuk karyawan ini."; return@launch
+                }
+                val uploadResult: ResultState<String> = if (bitmap != null) {
+                    val imageBytes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        val stream = ByteArrayOutputStream()
+                        val largest = maxOf(bitmap.width, bitmap.height)
+                        val scaled = if (largest > 1280) Bitmap.createScaledBitmap(bitmap,
+                            (bitmap.width * 1280L / largest).toInt().coerceAtLeast(1),
+                            (bitmap.height * 1280L / largest).toInt().coerceAtLeast(1), true) else bitmap
+                        try { scaled.compress(Bitmap.CompressFormat.JPEG, 75, stream); stream.toByteArray() }
+                        finally { if (scaled !== bitmap) scaled.recycle() }
+                    }
+                    attendanceRepository.uploadAttendanceImage(imageBytes, userId)
+                } else ResultState.Success("")
 
                 if (uploadResult is ResultState.Success) {
                     val request = ProcessAttendanceRequest(
@@ -602,6 +664,7 @@ class ProcessAttendanceViewModel @Inject constructor(
     }
 
     fun triggerError(errorMsg: String) {
+        if (!requirePhoto) { overlayMessage = errorMsg; return }
         viewModelScope.launch {
             isUploadLoading = false
             livenessStep = 99

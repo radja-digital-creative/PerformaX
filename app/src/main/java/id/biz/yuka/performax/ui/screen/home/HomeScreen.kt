@@ -50,10 +50,7 @@ import id.biz.yuka.performax.BuildConfig
 fun HomeScreen(
     onLogout: () -> Unit,
     onNavigateToMenu: (String) -> Unit,
-    viewModel: HomeViewModel = hiltViewModel(),
-    operasionalViewModel: OperasionalViewModel = hiltViewModel(),
-    insightViewModel: InsightViewModel = hiltViewModel(),
-    growthViewModel: GrowthViewModel = hiltViewModel()
+    viewModel: HomeViewModel = hiltViewModel()
 ) {
     LaunchedEffect(key1 = true) {
         viewModel.logoutSuccess.collect {
@@ -62,10 +59,14 @@ fun HomeScreen(
     }
 
     var selectedTab by remember { mutableIntStateOf(1) } // 0: Insight, 1: Operasional, 2: Growth
+    // ViewModels start network work in init: create only the visible tab.
+    val operasionalViewModel = if (selectedTab == 1) hiltViewModel<OperasionalViewModel>() else null
+    val insightViewModel = if (selectedTab == 0) hiltViewModel<InsightViewModel>() else null
+    val growthViewModel = if (selectedTab == 2) hiltViewModel<GrowthViewModel>() else null
     val pullToRefreshState = rememberPullToRefreshState()
     val currentWarning = viewModel.currentWarning
-    val isAnyLoading = viewModel.isLoading || operasionalViewModel.isLoading ||
-            insightViewModel.isLoading || growthViewModel.isLoading
+    val isAnyLoading = viewModel.isLoading || operasionalViewModel?.isLoading == true ||
+            insightViewModel?.isLoading == true || growthViewModel?.isLoading == true
 
     Scaffold(
         containerColor = Color.White,
@@ -95,9 +96,9 @@ fun HomeScreen(
                 isRefreshing = isAnyLoading,
                 onRefresh = {
                     viewModel.loadGlobalData()
-                    operasionalViewModel.fetchOperasionalData()
-                    insightViewModel.fetchInsightData()
-                    growthViewModel.fetchGrowthData()
+                    operasionalViewModel?.fetchOperasionalData()
+                    insightViewModel?.fetchInsightData()
+                    growthViewModel?.fetchGrowthData()
                 },
                 state = pullToRefreshState,
                 indicator = {
@@ -182,9 +183,9 @@ fun HomeScreen(
 
                     // 3. Tab Content
                     when (selectedTab) {
-                        0 -> insightTab(insightViewModel, onNavigateToMenu)
-                        1 -> operasionalTab(operasionalViewModel, onNavigateToMenu)
-                        2 -> growthTab(growthViewModel, onNavigateToMenu)
+                        0 -> insightTab(insightViewModel!!, onNavigateToMenu)
+                        1 -> operasionalTab(operasionalViewModel!!, onNavigateToMenu)
+                        2 -> growthTab(growthViewModel!!, onNavigateToMenu)
                     }
                 }
             }

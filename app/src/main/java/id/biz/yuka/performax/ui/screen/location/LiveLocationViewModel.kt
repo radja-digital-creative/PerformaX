@@ -11,6 +11,7 @@ import id.biz.yuka.libperformx.repository.LocationRepository
 import id.biz.yuka.libperformx.utils.LocationRefreshHelper
 import id.biz.yuka.libperformx.utils.ResultState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.Instant
@@ -39,6 +40,10 @@ class LiveLocationViewModel @Inject constructor(
     var selectedUserId by mutableStateOf<String?>(null)
     var toastMessage by mutableStateOf<String?>(null)
     var refreshingUserId by mutableStateOf<String?>(null)
+
+    private val locationMutex = kotlinx.coroutines.sync.Mutex()
+    var refreshedAt by mutableStateOf(Instant.now())
+        private set
 
     init {
         loadLocations()
@@ -74,22 +79,32 @@ class LiveLocationViewModel @Inject constructor(
         }
     }
 
-    fun loadLocations() {
-        viewModelScope.launch {
-            isLoading = true
-            when (val res = locationRepository.getLatestUserLocations()) {
-                is ResultState.Success -> {
-                    locationList = res.data
-                    res.data.forEach { 
-                        android.util.Log.d("LiveLocationVM", "User: ${it.fullName}, Lat: ${it.latitude}, Lng: ${it.longitude}")
-                    }
-                }
-                is ResultState.Error -> {
-                    toastMessage = res.message
-                }
+    suspend fun refreshWhileVisible() = kotlinx.coroutines.coroutineScope {
+        launch {
+            while (isActive) {
+                locationRefreshHelper.requestAllLocations()
+                delay(60_000L)
             }
-            isLoading = false
         }
+        while (isActive) {
+            fetchLocations(false)
+            delay(10_000L)
+        }
+    }
+
+    private suspend fun fetchLocations(showLoading: Boolean) {
+        if (!locationMutex.tryLock()) return
+        try {
+            if (showLoading) isLoading = true
+            when (val res = locationRepository.getLatestUserLocations()) {
+                is ResultState.Success -> { locationList = res.data; refreshedAt = Instant.now() }
+                is ResultState.Error -> if (showLoading) toastMessage = res.message
+            }
+        } finally { isLoading = false; locationMutex.unlock() }
+    }
+
+    fun loadLocations() {
+        viewModelScope.launch { fetchLocations(true) }
     }
 
     fun refreshAllLocations() {

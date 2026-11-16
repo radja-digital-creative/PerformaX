@@ -1,5 +1,7 @@
 package id.biz.yuka.performax.ui.screen.splash
 
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -186,12 +188,12 @@ fun SplashScreen(
     LaunchedEffect(uiState) {
         if (uiState is SplashUIState.DownloadComplete) {
             checkAndInstallApk(uiState.apkFile)
-        } else if (uiState is SplashUIState.UpdateAvailable) {
-            viewModel.downloadAndSaveApk(context)
+
         }
     }
 
-    BackHandler(enabled = uiState is SplashUIState.Downloading || uiState is SplashUIState.InstallPermissionDenied) {}
+    BackHandler(enabled = uiState is SplashUIState.Downloading) { viewModel.skipUpdate() }
+    BackHandler(enabled = uiState is SplashUIState.InstallPermissionDenied || uiState is SplashUIState.DownloadComplete || uiState is SplashUIState.UpdateAvailable || uiState is SplashUIState.Error) { viewModel.skipUpdate() }
 
     // ── 5. ANIMATIONS & STATES (Biometric Node Network Theme) ──────────────────
     val infiniteTransition = rememberInfiniteTransition(label = "biometric_infinite")
@@ -284,7 +286,7 @@ fun SplashScreen(
         // B. Center Content (Logo + Scanner Reticle + Telemetry)
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(horizontal = 24.dp)
+            modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 24.dp)
         ) {
 
             // Scanner Box (Logo + Reticle + Laser Line)
@@ -426,6 +428,15 @@ fun SplashScreen(
             // E. Interactive State Containers (Clean White Cards)
             Box(modifier = Modifier.fillMaxWidth()) {
                 when (uiState) {
+                    is SplashUIState.UpdateAvailable -> {
+                        LightEnterpriseCard {
+                            Text("Pembaruan tersedia: ${viewModel.releaseDetails?.versionName.orEmpty()}", fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(12.dp))
+                            Text(viewModel.releaseDetails?.releaseNotes.orEmpty(), modifier = Modifier.heightIn(max = 140.dp).verticalScroll(rememberScrollState()))
+                            Button(onClick = { viewModel.downloadAndSaveApk(context) }) { Text("Unduh & Perbarui") }
+                            TextButton(onClick = viewModel::skipUpdate) { Text("Nanti, buka aplikasi") }
+                        }
+                    }
 
                     is SplashUIState.LocationPermissionRequired -> {
                         LightEnterpriseCard {
@@ -540,11 +551,12 @@ fun SplashScreen(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                "Mohon tidak menutup aplikasi.",
+                                "Unduhan dapat dibatalkan jika koneksi lambat.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color(0xFFD32F2F),
                                 fontWeight = FontWeight.SemiBold
                             )
+                            TextButton(onClick = viewModel::skipUpdate) { Text("Batalkan, buka aplikasi") }
                         }
                     }
 
@@ -567,27 +579,26 @@ fun SplashScreen(
                             ) {
                                 Text("Buka Pengaturan", fontWeight = FontWeight.Bold, color = Color.White)
                             }
+                            TextButton(onClick = viewModel::skipUpdate) { Text("Lanjut ke aplikasi") }
                         }
                     }
 
                     is SplashUIState.Error -> {
-                        Text(
-                            text = (uiState as SplashUIState.Error).message,
-                            color = Color(0xFFD32F2F),
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        LightEnterpriseCard {
+                            Text((uiState as SplashUIState.Error).message)
+                            Button(onClick = { viewModel.downloadAndSaveApk(context) }) { Text("Coba Lagi") }
+                            TextButton(onClick = viewModel::skipUpdate) { Text("Lanjut ke aplikasi") }
+                        }
                     }
 
                     is SplashUIState.DownloadComplete -> {
-                        Text(
-                            text = "Membuka installer Android...",
-                            color = EmeraldGreen,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        LightEnterpriseCard {
+                            Text("APK siap dipasang", color = EmeraldGreen, fontWeight = FontWeight.Bold)
+                            Button(onClick = { checkAndInstallApk((uiState as SplashUIState.DownloadComplete).apkFile) }) {
+                                Text("Buka pemasang Android")
+                            }
+                            TextButton(onClick = viewModel::skipUpdate) { Text("Lanjut ke aplikasi") }
+                        }
                     }
 
                     else -> {

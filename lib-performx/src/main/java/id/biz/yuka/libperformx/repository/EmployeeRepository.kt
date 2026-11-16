@@ -21,6 +21,21 @@ import kotlinx.serialization.json.Json
 
 class EmployeeRepository {
 
+    suspend fun getAttendancePreferences(userId: String): ResultState<id.biz.yuka.libperformx.entity.EmployeeAttendancePreferences> = safeSupabaseCall {
+        SupabaseConfig.client.postgrest["employee_attendance_preferences"]
+            .select { filter { eq("user_id", userId) } }
+            .decodeSingleOrNull<id.biz.yuka.libperformx.entity.EmployeeAttendancePreferences>()
+            ?: id.biz.yuka.libperformx.entity.EmployeeAttendancePreferences(user_id = userId)
+    }
+
+    suspend fun saveAttendancePreferences(settings: id.biz.yuka.libperformx.entity.EmployeeAttendancePreferences): ResultState<Unit> = safeSupabaseCall {
+        val payload = Json { encodeDefaults = true }.encodeToJsonElement(
+            id.biz.yuka.libperformx.entity.EmployeeAttendancePreferences.serializer(), settings
+        )
+        SupabaseConfig.client.postgrest["employee_attendance_preferences"].upsert(payload)
+        Unit
+    }
+
     /** READ ALL: Mendapatkan semua karyawan aktif */
     suspend fun getAllEmployees(storeId: String? = null): ResultState<List<EmployeeEntity>> {
         return safeSupabaseCall {
