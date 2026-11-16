@@ -20,7 +20,34 @@ import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
 import io.github.jan.supabase.storage.storage
 
+/** Access to record attendance does not approve a request or waive its deductions. */
+@kotlinx.serialization.Serializable
+data class AttendanceExceptionAccess(
+    val offsite_status: String? = null,
+    val late_status: String? = null,
+    val early_status: String? = null
+) {
+    val allowsOffsite: Boolean get() = isEligible(offsite_status)
+    val allowsLateArrival: Boolean get() = isEligible(late_status)
+    val allowsEarlyDeparture: Boolean get() = isEligible(early_status)
+    fun hasPendingFor(attendanceType: String): Boolean =
+        offsite_status == "pending" ||
+            (attendanceType == "check_in" && late_status == "pending") ||
+            (attendanceType == "check_out" && early_status == "pending")
+
+    private fun isEligible(status: String?): Boolean = status == "pending" || status == "approved"
+}
+
 class AttendanceRepository {
+
+    /** Server scopes requests to this employee/schedule and resolves exception categories. */
+    suspend fun getAttendanceExceptionAccess(userId: String, scheduleId: String): ResultState<AttendanceExceptionAccess> = safeSupabaseCall {
+        SupabaseConfig.client.postgrest.rpc(
+            function = "get_attendance_exception_access",
+            parameters = mapOf("p_user_id" to userId, "p_schedule_id" to scheduleId)
+        ).decodeAs<AttendanceExceptionAccess>()
+    }
+
 
     // ==========================================
     // FUNGSI UPLOAD FOTO ABSENSI

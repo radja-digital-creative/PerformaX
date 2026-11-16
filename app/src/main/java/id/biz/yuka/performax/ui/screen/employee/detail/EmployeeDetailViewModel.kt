@@ -24,6 +24,7 @@ import id.biz.yuka.libperformx.request.UserStoreRequest
 import id.biz.yuka.libperformx.utils.ResultState
 import io.github.jan.supabase.gotrue.auth
 import kotlinx.coroutines.launch
+import id.biz.yuka.performax.ui.screen.account.AccountAccessPolicy
 import java.util.UUID
 import javax.inject.Inject
 
@@ -50,6 +51,12 @@ class EmployeeDetailViewModel @Inject constructor(
     var employee by mutableStateOf<EmployeeEntity?>(null)
     var isLoading by mutableStateOf(false)
     var isOwner by mutableStateOf(false)
+    var canEditCredentials by mutableStateOf(false)
+        private set
+    var currentEmail by mutableStateOf("")
+        private set
+    var isSavingAccount by mutableStateOf(false)
+        private set
 
     var isEditMode by mutableStateOf(false)
     var successMessage by mutableStateOf<String?>(null)
@@ -189,14 +196,18 @@ class EmployeeDetailViewModel @Inject constructor(
             isLoading = true
             val currentUserId = SupabaseConfig.client.auth.currentUserOrNull()?.id
 
+            isOwner = false
+            canEditCredentials = AccountAccessPolicy.canEditCredentials(currentUserId, null, employeeId)
             if (currentUserId != null) {
                 val meRes = employeeRepository.getEmployeeById(currentUserId)
                 if (meRes is ResultState.Success) {
                     val role = meRes.data.roleName.lowercase()
                     isOwner = role == "owner" || role == "admin"
+                    canEditCredentials = AccountAccessPolicy.canEditCredentials(currentUserId, role, employeeId)
                 }
             }
 
+            if (canEditCredentials) loadAccountEmail()
             val result = employeeRepository.getEmployeeById(employeeId)
             if (result is ResultState.Success) {
                 employee = result.data
@@ -209,6 +220,35 @@ class EmployeeDetailViewModel @Inject constructor(
                 if (shifts is ResultState.Success) availableShifts = shifts.data.filter { it.isActive }
             }
             isLoading = false
+        }
+    }
+
+    private suspend fun loadAccountEmail() {
+        currentEmail = ""
+        when (val result = employeeRepository.getEmployeeAccountEmail(employeeId)) {
+            is ResultState.Success -> currentEmail = result.data
+            is ResultState.Error -> errorMessage = result.message
+        }
+    }
+
+    fun saveAccount() {
+        if (!canEditCredentials || isSavingAccount) return
+        val email = editEmail.trim().takeIf { it.isNotBlank() }
+        val password = editPassword.takeIf { it.isNotBlank() }
+        if (email == null && password == null) return
+        viewModelScope.launch {
+            isSavingAccount = true
+            try {
+                when (val result = employeeRepository.updateEmployeeCredentials(employeeId, email, password)) {
+                    is ResultState.Success -> {
+                        editEmail = ""
+                        editPassword = ""
+                        successMessage = "Akun diperbarui. Jika diminta, konfirmasikan email baru melalui tautan email."
+                        loadAccountEmail()
+                    }
+                    is ResultState.Error -> errorMessage = result.message
+                }
+            } finally { isSavingAccount = false }
         }
     }
 
@@ -296,8 +336,7 @@ class EmployeeDetailViewModel @Inject constructor(
 
             val request = UpdateEmployeeRequest(
                 p_user_id = currentEmp.id,
-                email = editEmail.takeIf { it.isNotBlank() },
-                password = editPassword.takeIf { it.isNotBlank() },
+
                 p_role_id = roleId,
                 p_full_name = editName,
                 p_gender = currentEmp.gender,

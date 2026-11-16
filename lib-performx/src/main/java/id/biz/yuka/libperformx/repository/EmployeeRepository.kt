@@ -17,6 +17,9 @@ import io.github.jan.supabase.postgrest.rpc
 import io.github.jan.supabase.storage.storage
 import io.ktor.util.InternalAPI
 import kotlinx.serialization.encodeToString
+import io.ktor.client.statement.bodyAsText
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.Json
 
 class EmployeeRepository {
@@ -83,13 +86,9 @@ class EmployeeRepository {
     @OptIn(InternalAPI::class)
     suspend fun createEmployee(request: RegisterEmployeeRequest): ResultState<Boolean> {
         return safeSupabaseCall {
-            // Memanggil Edge Function 'create_user_admin'
-            SupabaseConfig.client.functions.invoke("create_user_admin") {
-                body = Json.encodeToString(request)
-                headers.append("Content-Type", "application/json")
-            }
+            val payload = Json.encodeToJsonElement(RegisterEmployeeRequest.serializer(), request).jsonObject
+            accountAction(kotlinx.serialization.json.JsonObject(payload + ("action" to kotlinx.serialization.json.JsonPrimitive("create"))))
             true
-            true // Jika tidak ada exception dilempar, berarti sukses
         }
     }
 
@@ -106,46 +105,40 @@ class EmployeeRepository {
         }
     }
 
-    /** DELETE (SOFT DELETE): Mengubah is_active jadi false */
-    suspend fun deleteEmployee(userId: String): ResultState<Unit> {
-        return try {
-            val cleanUserId = userId.trim()
-            android.util.Log.d("DeleteEmployee", ">>> TRY START: Update profiles is_active = false for userId = '$cleanUserId'")
-            
-            // Opsi 1: Try update filter by eq("id", cleanUserId)
-            var updatedRows = SupabaseConfig.client.postgrest["profiles"]
-                .update(mapOf("is_active" to false)) {
-                    select()
-                    filter { eq("id", cleanUserId) }
-                }.decodeList<kotlinx.serialization.json.JsonObject>()
-
-            android.util.Log.d("DeleteEmployee", ">>> POSTGREST RESPONSE (by id): ${updatedRows.size} row(s) updated.")
-
-            // Opsi 2: Fallback jika kolom primary key di tabel profiles adalah user_id
-            if (updatedRows.isEmpty()) {
-                android.util.Log.d("DeleteEmployee", ">>> TRY FALLBACK: Filter by user_id = '$cleanUserId'")
-                updatedRows = SupabaseConfig.client.postgrest["profiles"]
-                    .update(mapOf("is_active" to false)) {
-                        select()
-                        filter { eq("user_id", cleanUserId) }
-                    }.decodeList<kotlinx.serialization.json.JsonObject>()
-
-                android.util.Log.d("DeleteEmployee", ">>> POSTGREST RESPONSE (by user_id): ${updatedRows.size} row(s) updated.")
-            }
-
-            if (updatedRows.isEmpty()) {
-                val errorMsg = "Gagal: 0 data ter-update di Supabase. Pastikan ID karyawan '$cleanUserId' ada di tabel 'profiles' dan RLS/Permission mengizinkan update."
-                android.util.Log.e("DeleteEmployee", ">>> $errorMsg")
-                return ResultState.Error(errorMsg)
-            }
-
-            android.util.Log.d("DeleteEmployee", ">>> TRY SUCCESS: Updated profile record: ${updatedRows.first()}")
-            ResultState.Success(Unit)
-        } catch (e: Exception) {
-            android.util.Log.e("DeleteEmployee", ">>> CATCH ERROR: ${e.message}", e)
-            e.printStackTrace()
-            ResultState.Error(e.message ?: "Gagal menonaktifkan karyawan.")
+    /** Account actions are authorized by the server, never by caller-supplied role. */
+    @OptIn(InternalAPI::class)
+    private suspend fun accountAction(payload: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject {
+        val response = SupabaseConfig.client.functions.invoke("employee-account") {
+            body = payload.toString()
+            headers.append("Content-Type", "application/json")
         }
+        return Json.parseToJsonElement(response.bodyAsText()).jsonObject
+    }
+
+    suspend fun getEmployeeAccountEmail(userId: String): ResultState<String> = safeSupabaseCall {
+        val result = accountAction(kotlinx.serialization.json.buildJsonObject {
+            put("action", kotlinx.serialization.json.JsonPrimitive("get_email"))
+            put("user_id", kotlinx.serialization.json.JsonPrimitive(userId))
+        })
+        result["email"]?.jsonPrimitive?.content ?: error("Email akun tidak tersedia.")
+    }
+
+    suspend fun updateEmployeeCredentials(userId: String, email: String?, password: String?): ResultState<Unit> = safeSupabaseCall {
+        accountAction(kotlinx.serialization.json.buildJsonObject {
+            put("action", kotlinx.serialization.json.JsonPrimitive("update_credentials"))
+            put("user_id", kotlinx.serialization.json.JsonPrimitive(userId))
+            email?.let { put("email", kotlinx.serialization.json.JsonPrimitive(it)) }
+            password?.let { put("password", kotlinx.serialization.json.JsonPrimitive(it)) }
+        })
+        Unit
+    }
+
+    suspend fun deleteEmployee(userId: String): ResultState<Unit> = safeSupabaseCall {
+        accountAction(kotlinx.serialization.json.buildJsonObject {
+            put("action", kotlinx.serialization.json.JsonPrimitive("disable"))
+            put("user_id", kotlinx.serialization.json.JsonPrimitive(userId.trim()))
+        })
+        Unit
     }
 
     suspend fun uploadKtpImage(userId: String, imageBytes: ByteArray): ResultState<String> {

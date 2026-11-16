@@ -54,7 +54,7 @@ fun EmployeeCreateScreen(
                         modifier = Modifier.fillMaxWidth().height(52.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = WonderOrange),
                         shape = RoundedCornerShape(12.dp),
-                        enabled = !viewModel.isLoading
+                        enabled = !viewModel.isLoading && viewModel.allowedRoles.any { it.first == viewModel.roleId }
                     ) {
                         if (viewModel.isLoading) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
                         else Text("Simpan Karyawan", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
@@ -89,7 +89,7 @@ fun EmployeeCreateScreen(
                         Spacer(modifier = Modifier.height(16.dp))
                         OutlinedTextField(value = viewModel.email, onValueChange = { viewModel.email = it }, label = { Text("Email (Wajib)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                         Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(value = viewModel.password, onValueChange = { viewModel.password = it }, label = { Text("Password Sementara (Wajib)") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        id.biz.yuka.performax.ui.screen.account.NewPasswordField(value = viewModel.password, onValueChange = { viewModel.password = it }, label = "Password Sementara (Wajib)")
                     }
                 }
             }
@@ -124,15 +124,13 @@ fun EmployeeCreateScreen(
 
                         Spacer(modifier = Modifier.height(8.dp))
                         Text("Posisi / Role", style = MaterialTheme.typography.labelMedium, color = WonderGrey)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = viewModel.roleId == 4, onClick = { viewModel.roleId = 4 }, colors = RadioButtonDefaults.colors(selectedColor = WonderOrange))
-                            Text("Staff")
-                            Spacer(modifier = Modifier.width(8.dp))
-                            RadioButton(selected = viewModel.roleId == 3, onClick = { viewModel.roleId = 3 }, colors = RadioButtonDefaults.colors(selectedColor = WonderOrange))
-                            Text("Manager")
-                            Spacer(modifier = Modifier.width(8.dp))
-                            RadioButton(selected = viewModel.roleId == 2, onClick = { viewModel.roleId = 2 }, colors = RadioButtonDefaults.colors(selectedColor = WonderOrange))
-                            Text("Admin")
+                        Column {
+                            viewModel.allowedRoles.forEach { (id, name) ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(selected = viewModel.roleId == id, onClick = { viewModel.roleId = id }, colors = RadioButtonDefaults.colors(selectedColor = WonderOrange))
+                                    Text(name)
+                                }
+                            }
                         }
                     }
                 }

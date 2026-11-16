@@ -471,16 +471,24 @@ private fun CameraAttendanceInterface(
                     Column(modifier = Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(if (viewModel.currentAttendanceType == "check_in") "ABSEN MASUK" else "ABSEN PULANG", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                            if (viewModel.hasApprovedShiftBypass) {
+                            if (viewModel.hasShiftExceptionAccess) {
                                 Surface(color = WonderOrange.copy(0.15f), shape = RoundedCornerShape(4.dp)) {
-                                    Text("BYPASS SHIFT", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = WonderOrange, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                    Text("IZIN JAM SHIFT", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = WonderOrange, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                                 }
                             }
-                            if (viewModel.hasApprovedOffsite) {
+                            if (viewModel.hasOffsiteAccess) {
                                 Surface(color = Color(0xFF2E7D32).copy(0.15f), shape = RoundedCornerShape(4.dp)) {
                                     Text("OFFSITE", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32), modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                                 }
                             }
+                        }
+                        if (viewModel.hasPendingException) {
+                            Text(
+                                "Izin masih menunggu persetujuan. Anda dapat absen; potongan tetap berlaku sampai izin disetujui.",
+                                textAlign = TextAlign.Center,
+                                fontSize = 12.sp,
+                                color = WonderOrange
+                            )
                         }
                         Text(viewModel.overlayMessage, textAlign = TextAlign.Center, fontSize = 14.sp, fontWeight = FontWeight.Medium)
 

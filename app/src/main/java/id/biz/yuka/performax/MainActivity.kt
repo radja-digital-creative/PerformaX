@@ -20,18 +20,12 @@ import id.biz.yuka.performax.utils.UiEvent
 import id.biz.yuka.performax.utils.UiEventManager
 import javax.inject.Inject
 import android.content.Intent
-import id.biz.yuka.performax.ui.navigation.Screen
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var uiEventManager: UiEventManager
-
-    override fun onStart() {
-        super.onStart()
-        id.biz.yuka.performax.service.LiveLocationTracking.resumeIfEnabled(this)
-    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -58,10 +52,16 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                val navController = rememberNavController()
-                
                 Box {
-                    AppNav(navController = navController)
+                    id.biz.yuka.performax.ui.session.SessionAccessGate { signedIn ->
+                        if (signedIn) {
+                            val navController = rememberNavController()
+                            AppNav(navController = navController)
+                        } else {
+                            // SessionAccessGate observes saveSession and verifies before mounting app routes.
+                            id.biz.yuka.performax.ui.screen.login.LoginScreen(onLoginSuccess = {})
+                        }
+                    }
                     
                     GlobalErrorPopup(
                         errorMessage = globalErrorMessage,

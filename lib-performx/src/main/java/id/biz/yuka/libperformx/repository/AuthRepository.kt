@@ -13,7 +13,18 @@ import io.github.jan.supabase.gotrue.user.UserSession
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
 
+@kotlinx.serialization.Serializable
+private data class AccountAccessResponse(val active: Boolean)
+
 class AuthRepository {
+    /** Server-authoritative access check; errors must not be interpreted as revocation. */
+    suspend fun isCurrentAccountActive(): Boolean = SupabaseConfig.client.postgrest
+        .rpc("current_account_access").decodeAs<AccountAccessResponse>().active
+
+    suspend fun signOutLocally() {
+        SupabaseConfig.client.auth.signOut(scope = io.github.jan.supabase.gotrue.SignOutScope.LOCAL)
+    }
+
 
 
     /**
@@ -64,6 +75,12 @@ class AuthRepository {
             SupabaseConfig.client.auth.signInWith(Email) {
                 email = request.email
                 password = request.password
+            }
+
+            // The login is only accepted after the server confirms the account is active.
+            if (!isCurrentAccountActive()) {
+                signOutLocally()
+                throw IllegalStateException("Akun Anda tidak aktif atau telah dihapus. Hubungi admin.")
             }
 
             // 2. Ambil Sesi

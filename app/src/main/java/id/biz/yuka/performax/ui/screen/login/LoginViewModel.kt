@@ -45,6 +45,9 @@ class LoginViewModel @Inject constructor(
             
             when (result) {
                 is ResultState.Success -> {
+                    // This login VM can outlive the screen; never retain credentials after success.
+                    password = ""
+                    email = ""
                     sessionManager.saveSession(result.data.email)
                     _loginSuccess.emit(Unit)
                 }
