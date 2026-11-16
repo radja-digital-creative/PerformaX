@@ -47,7 +47,6 @@ class LocationWorker @AssistedInject constructor(
         val ready = withTimeoutOrNull(5_000) { SupabaseConfig.client.auth.sessionStatus.first { it !is SessionStatus.LoadingFromStorage } }
         if (ready == null) return Result.retry()
         val userId = SupabaseConfig.client.auth.currentUserOrNull()?.id ?: return Result.success()
-        if (LiveLocationTracking.isPaused(applicationContext, userId)) return Result.success()
         if (ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return Result.success()
         if (android.os.Build.VERSION.SDK_INT >= 29 && ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) return Result.success()
 

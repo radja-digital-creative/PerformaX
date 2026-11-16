@@ -143,11 +143,7 @@ fun HomeScreen(
                                 Column(Modifier.padding(16.dp)) {
                                     Text("Lokasi realtime", fontWeight = FontWeight.Bold)
                                     Text(trackingStatus, style = MaterialTheme.typography.bodyMedium)
-                                    Text("Target pembaruan 15–30 detik selama GPS dan koneksi tersedia. Pemantauan berjalan dengan notifikasi aktif.", style = MaterialTheme.typography.bodySmall)
-                                    Row {
-                                        TextButton(onClick = { LiveLocationTracking.startFromHome(context, profile.id, profile.role, resume = true) }) { Text("Aktifkan") }
-                                        TextButton(onClick = { LiveLocationTracking.pause(context) }) { Text("Jeda") }
-                                    }
+                                    Text("Target pembaruan 15–30 detik selama GPS dan koneksi tersedia. Pemantauan lokasi berjalan otomatis selama login dan ditampilkan melalui notifikasi.", style = MaterialTheme.typography.bodySmall)
                                 }
                             }
                         }

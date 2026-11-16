@@ -51,11 +51,10 @@ class LocationForegroundService : Service() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "Lokasi realtime karyawan", NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(this, 8801, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val pause = PendingIntent.getService(this, 8802, Intent(this, LocationForegroundService::class.java).setAction(ACTION_PAUSE), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.mipmap.ic_launcher_round).setContentTitle("PerformaX • lokasi realtime aktif")
             .setContentText(message).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
-            .addAction(0, "Jeda lokasi", pause).build()
+            .build()
     }
     private fun status(message: String) {
         LiveLocationTracking.report(message)
@@ -64,10 +63,9 @@ class LocationForegroundService : Service() {
 
     @SuppressLint("MissingPermission")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_PAUSE) { LiveLocationTracking.pause(this); return START_NOT_STICKY }
         if (trackingJob?.isActive == true) return START_STICKY
         val enabledId = LiveLocationTracking.enabledUser(this)
-        if (enabledId == null || LiveLocationTracking.isPaused(this, enabledId)) { stopSelf(); return START_NOT_STICKY }
+        if (enabledId == null) { stopSelf(); return START_NOT_STICKY }
         try {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification("Menunggu GPS…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
         } catch (_: Exception) {
@@ -87,7 +85,7 @@ class LocationForegroundService : Service() {
                     .setMinUpdateIntervalMillis(10_000).setMaxUpdateDelayMillis(15_000).setMaxUpdateAgeMillis(0).build()
                 fusedLocationClient.requestLocationUpdates(request, callback, Looper.getMainLooper()).await()
                 for (location in fixes) {
-                    if (SupabaseConfig.client.auth.currentUserOrNull()?.id != enabledId || LiveLocationTracking.isPaused(this@LocationForegroundService, enabledId)) break
+                    if (SupabaseConfig.client.auth.currentUserOrNull()?.id != enabledId) break
                     val now = SystemClock.elapsedRealtime()
                     if (!gate.shouldUpload(now, location.elapsedRealtimeNanos / 1_000_000, location.latitude, location.longitude)) continue
                     val result = withTimeoutOrNull(15_000) {
@@ -125,7 +123,6 @@ class LocationForegroundService : Service() {
     companion object {
         private const val CHANNEL = "performax_location_service"
         private const val NOTIFICATION_ID = 8801
-        const val ACTION_PAUSE = "id.biz.yuka.performax.PAUSE_LOCATION"
         @Volatile var isRunning = false
             private set
     }
