@@ -1,135 +1,132 @@
 package id.biz.yuka.performax.service
 
 import android.annotation.SuppressLint
-import id.biz.yuka.performax.utils.fetchFreshLocation
-import kotlinx.coroutines.CancellationException
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.location.Location
-import android.location.LocationManager
-import android.os.Build
 import android.os.IBinder
-import android.util.Log
+import android.os.Looper
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
-import com.google.android.gms.location.CurrentLocationRequest
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.Priority
-import com.google.android.gms.tasks.CancellationTokenSource
+import androidx.core.app.ServiceCompat
+import com.google.android.gms.location.*
 import dagger.hilt.android.AndroidEntryPoint
+import id.biz.yuka.libperformx.SupabaseConfig
 import id.biz.yuka.libperformx.repository.LocationRepository
+import id.biz.yuka.libperformx.utils.ResultState
+import id.biz.yuka.performax.MainActivity
 import id.biz.yuka.performax.R
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import io.github.jan.supabase.gotrue.SessionStatus
+import io.github.jan.supabase.gotrue.auth
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.tasks.await
-import kotlinx.coroutines.withTimeoutOrNull
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class LocationForegroundService : Service() {
-
-    @Inject
-    lateinit var fusedLocationClient: FusedLocationProviderClient
-
-    @Inject
-    lateinit var locationRepository: LocationRepository
-
-    private val serviceScope = CoroutineScope(Dispatchers.IO)
-
+    @Inject lateinit var fusedLocationClient: FusedLocationProviderClient
+    @Inject lateinit var locationRepository: LocationRepository
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var trackingJob: Job? = null
+    private val fixes = Channel<Location>(Channel.CONFLATED)
+    private val callback = object : LocationCallback() {
+        override fun onLocationResult(result: LocationResult) { result.lastLocation?.let { fixes.trySend(it) } }
+        override fun onLocationAvailability(availability: LocationAvailability) {
+            if (!availability.isLocationAvailable) status("Menunggu GPS • lokasi belum diperbarui")
+        }
+    }
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun notification(message: String): android.app.Notification {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(NotificationChannel(CHANNEL, "Lokasi realtime karyawan", NotificationManager.IMPORTANCE_LOW))
+        val open = PendingIntent.getActivity(this, 8801, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val pause = PendingIntent.getService(this, 8802, Intent(this, LocationForegroundService::class.java).setAction(ACTION_PAUSE), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        return NotificationCompat.Builder(this, CHANNEL)
+            .setSmallIcon(R.mipmap.ic_launcher_round).setContentTitle("PerformaX • lokasi realtime aktif")
+            .setContentText(message).setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
+            .addAction(0, "Jeda lokasi", pause).build()
+    }
+    private fun status(message: String) {
+        LiveLocationTracking.report(message)
+        if (isRunning) (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(message))
+    }
 
     @SuppressLint("MissingPermission")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val channelId = "performax_location_service"
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                "Layanan Pemantauan Lokasi",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            notificationManager.createNotificationChannel(channel)
+        if (intent?.action == ACTION_PAUSE) { LiveLocationTracking.pause(this); return START_NOT_STICKY }
+        if (trackingJob?.isActive == true) return START_STICKY
+        val enabledId = LiveLocationTracking.enabledUser(this)
+        if (enabledId == null || LiveLocationTracking.isPaused(this, enabledId)) { stopSelf(); return START_NOT_STICKY }
+        try {
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification("Menunggu GPS…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        } catch (_: Exception) {
+            LiveLocationTracking.report("Izin lokasi belum tersedia. Buka aplikasi untuk mengaktifkan.")
+            stopSelf(); return START_NOT_STICKY
         }
-
-        val notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("Memperbarui Lokasi Kerja")
-            .setContentText("Mengirim lokasi...")
-            .setSmallIcon(R.mipmap.ic_launcher_round)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
-            .build()
-
-        startForeground(NOTIFICATION_ID, notification)
-
-        // Guard: jika sudah ada service yang sedang berjalan, skip
-        if (isRunning) {
-            Log.w("LOCATION_SERVICE", "Service sudah aktif, skip duplikat onStartCommand.")
-            return START_NOT_STICKY
-        }
-
         isRunning = true
-
-        serviceScope.launch {
+        status("Lokasi realtime aktif • menunggu GPS")
+        trackingJob = scope.launch {
             try {
-                Log.d("LOCATION_SERVICE", "Mulai mengambil lokasi cepat on-demand...")
-
-                // Cek status GPS menggunakan LocationManager standar
-                val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-                val isGpsEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) || 
-                                   locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-
-                if (!isGpsEnabled) {
-                    Log.d("LOCATION_SERVICE", "GPS terdeteksi OFF.")
+                withTimeoutOrNull(5_000) {
+                    SupabaseConfig.client.auth.sessionStatus.first { it !is SessionStatus.LoadingFromStorage }
                 }
-
-                // Ambil lokasi cepat dengan total timeout 15 detik
-                val location = withTimeoutOrNull(28_000L) {
-                    fusedLocationClient.fetchFreshLocation()
-                }
-
-                if (location != null) {
-                    Log.d("LOCATION_SERVICE", "Lokasi cepat ditemukan: lat=${location.latitude}, lng=${location.longitude}")
-                    val result = locationRepository.recordUserLocation(
-                        latitude = location.latitude,
-                        longitude = location.longitude,
-                        provider = "ondemand_fcm"
-                    )
-                    Log.d("LOCATION_SERVICE", "Hasil simpan lokasi ke Supabase: $result")
-                } else {
-                    Log.w("LOCATION_SERVICE", "Gagal mendapatkan lokasi (timeout atau semua provider null).")
+                if (SupabaseConfig.client.auth.currentUserOrNull()?.id != enabledId) return@launch
+                val gate = LocationDeliveryGate()
+                val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, LocationDeliveryGate.INTERVAL_MS)
+                    .setMinUpdateIntervalMillis(10_000).setMaxUpdateDelayMillis(15_000).setMaxUpdateAgeMillis(0).build()
+                fusedLocationClient.requestLocationUpdates(request, callback, Looper.getMainLooper()).await()
+                for (location in fixes) {
+                    if (SupabaseConfig.client.auth.currentUserOrNull()?.id != enabledId || LiveLocationTracking.isPaused(this@LocationForegroundService, enabledId)) break
+                    val now = SystemClock.elapsedRealtime()
+                    if (!gate.shouldUpload(now, location.elapsedRealtimeNanos / 1_000_000, location.latitude, location.longitude)) continue
+                    val result = withTimeoutOrNull(15_000) {
+                        locationRepository.recordUserLocation(location.latitude, location.longitude, "realtime_foreground",
+                            Instant.ofEpochMilli(location.time).toString(), expectedUserId = enabledId)
+                    }
+                    if (result is ResultState.Success) {
+                        gate.markSuccess(now)
+                        val time = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.of("Asia/Jakarta")).format(Instant.now())
+                        status("Lokasi realtime aktif • terkirim $time WIB")
+                    } else status("Menunggu koneksi • lokasi belum terkirim")
                 }
             } catch (e: CancellationException) { throw e
-        } catch (e: Exception) {
-                Log.e("LOCATION_SERVICE", "Error di LocationForegroundService: ${e.message}", e)
+            } catch (_: Exception) { status("Lokasi terhenti. Periksa izin/GPS lalu buka aplikasi.")
             } finally {
-                Log.d("LOCATION_SERVICE", "Menghentikan LocationForegroundService...")
+                fusedLocationClient.removeLocationUpdates(callback)
                 isRunning = false
+                val previousStatus = LiveLocationTracking.status.value
+                if (previousStatus.startsWith("Lokasi realtime aktif") || previousStatus.startsWith("Menunggu")) {
+                    LiveLocationTracking.report("Lokasi realtime berhenti • buka aplikasi untuk mengaktifkan")
+                }
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
         }
-
-        return START_NOT_STICKY
+        return START_STICKY
     }
-
     override fun onDestroy() {
-        super.onDestroy()
+        scope.cancel()
+        fusedLocationClient.removeLocationUpdates(callback)
+        fixes.close()
         isRunning = false
-        serviceScope.cancel()
+        super.onDestroy()
     }
-
     companion object {
+        private const val CHANNEL = "performax_location_service"
         private const val NOTIFICATION_ID = 8801
-
-        /** Flag volatile agar LocationWorker bisa cek apakah service sedang aktif */
-        @Volatile
-        var isRunning: Boolean = false
+        const val ACTION_PAUSE = "id.biz.yuka.performax.PAUSE_LOCATION"
+        @Volatile var isRunning = false
             private set
     }
 }

@@ -25,6 +25,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
+        TokenSyncWorker.enqueue(this)
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
@@ -64,8 +65,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             }
 
             try {
-                val serviceIntent = Intent(this, LocationForegroundService::class.java)
-                ContextCompat.startForegroundService(this, serviceIntent)
+                LocationWorker.requestImmediate(this)
             } catch (e: Exception) {
                 Log.w("LOCATION_REFRESH", "Layanan lokasi ditolak Android: ${e.javaClass.simpleName}")
             }

@@ -1,5 +1,6 @@
 package id.biz.yuka.performax.ui.screen.location
 
+import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -13,12 +14,7 @@ import id.biz.yuka.libperformx.utils.ResultState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.time.Duration
 import java.time.Instant
-import java.time.OffsetDateTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 import id.biz.yuka.libperformx.repository.ScheduleRepository
 import id.biz.yuka.libperformx.repository.StoreRepository
 import id.biz.yuka.performax.ui.components.StoreMapMarker
@@ -41,6 +37,7 @@ class LiveLocationViewModel @Inject constructor(
     var toastMessage by mutableStateOf<String?>(null)
     var refreshingUserId by mutableStateOf<String?>(null)
 
+    private var lastAutomaticPingAt: Long? = null
     private val locationMutex = kotlinx.coroutines.sync.Mutex()
     var refreshedAt by mutableStateOf(Instant.now())
         private set
@@ -82,11 +79,23 @@ class LiveLocationViewModel @Inject constructor(
     suspend fun refreshWhileVisible() = kotlinx.coroutines.coroutineScope {
         launch {
             while (isActive) {
+                // Keep lifecycle resumes from repeatedly waking all employee devices.
+                val elapsed = SystemClock.elapsedRealtime()
+                val lastPing = lastAutomaticPingAt
+                val remaining = if (lastPing == null) 0L else 300_000L - (elapsed - lastPing)
+                if (remaining > 0L) {
+                    delay(remaining)
+                    continue
+                }
+                lastAutomaticPingAt = elapsed
                 locationRefreshHelper.requestAllLocations()
-                delay(60_000L)
+                // Continuous tracking supplies updates; ping is only a fallback.
+                delay(300_000L)
             }
         }
         while (isActive) {
+            // Age cached observations even when the next fetch fails.
+            refreshedAt = Instant.now()
             fetchLocations(false)
             delay(10_000L)
         }
@@ -150,29 +159,6 @@ class LiveLocationViewModel @Inject constructor(
         toastMessage = null
     }
 
-    fun formatRelativeTime(recordedAtStr: String): String {
-        if (recordedAtStr.isBlank()) return "Waktu tidak diketahui"
-        return try {
-            val odt = OffsetDateTime.parse(recordedAtStr)
-            val recordedInstant = odt.toInstant()
-            val nowInstant = Instant.now()
-
-            val duration = Duration.between(recordedInstant, nowInstant)
-            val minutes = duration.toMinutes()
-            val hours = duration.toHours()
-
-            if (minutes < 1) {
-                "Baru saja"
-            } else if (minutes < 60) {
-                "$minutes menit lalu"
-            } else if (hours < 24) {
-                "$hours jam lalu"
-            } else {
-                val zdt = odt.atZoneSameInstant(ZoneId.of("Asia/Jakarta"))
-                zdt.format(DateTimeFormatter.ofPattern("d MMM yyyy HH:mm", Locale("id", "ID"))) + " WIB"
-            }
-        } catch (e: Exception) {
-            recordedAtStr
-        }
-    }
+    fun locationStatus(recordedAt: String?): LocationFreshness =
+        locationFreshness(recordedAt, refreshedAt)
 }

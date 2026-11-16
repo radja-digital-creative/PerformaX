@@ -15,6 +15,8 @@ import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
+import id.biz.yuka.performax.service.LiveLocationTracking
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,6 +54,15 @@ fun HomeScreen(
     onNavigateToMenu: (String) -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
+    val context = LocalContext.current
+    val trackingStatus by LiveLocationTracking.status.collectAsState()
+    val profile = viewModel.userProfile
+    LaunchedEffect(profile?.id) {
+        profile?.let {
+            LiveLocationTracking.startFromHome(context, it.id, it.role)
+            id.biz.yuka.performax.service.TokenSyncWorker.enqueue(context)
+        }
+    }
     LaunchedEffect(key1 = true) {
         viewModel.logoutSuccess.collect {
             onLogout()
@@ -117,7 +128,7 @@ fun HomeScreen(
                     item {
                         CombinedHeader(
                             name = viewModel.userProfile?.fullName ?: "User",
-                            onLogout = { viewModel.logout() },
+                            onLogout = { LiveLocationTracking.stopForLogout(context); viewModel.logout() },
                             onNavigateToUserAnnouncement = { onNavigateToMenu(Screen.UserAnnouncement.route) },
                             onNavigateToKpi = { onNavigateToMenu(Screen.Kpi.route) },
                             onNavigateToProfile = { onNavigateToMenu(Screen.Profile.route) },
@@ -126,6 +137,21 @@ fun HomeScreen(
                         )
                     }
 
+                    if (profile != null && !profile.role.equals("owner", ignoreCase = true)) {
+                        item {
+                            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                Column(Modifier.padding(16.dp)) {
+                                    Text("Lokasi realtime", fontWeight = FontWeight.Bold)
+                                    Text(trackingStatus, style = MaterialTheme.typography.bodyMedium)
+                                    Text("Target pembaruan 15–30 detik selama GPS dan koneksi tersedia. Pemantauan berjalan dengan notifikasi aktif.", style = MaterialTheme.typography.bodySmall)
+                                    Row {
+                                        TextButton(onClick = { LiveLocationTracking.startFromHome(context, profile.id, profile.role, resume = true) }) { Text("Aktifkan") }
+                                        TextButton(onClick = { LiveLocationTracking.pause(context) }) { Text("Jeda") }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // ✅ 3. BUBBLE CHAT NOTIFICATION (MENGGUNAKAN SKALA PRIORITAS)
                     if (currentWarning != null && !isAnyLoading) {
                         item {

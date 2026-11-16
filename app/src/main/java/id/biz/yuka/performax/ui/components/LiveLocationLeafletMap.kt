@@ -32,7 +32,8 @@ data class LiveLocationMapMarker(
     val title: String = "",
     val photoUrl: String = "",
     val phone: String = "",
-    val timeText: String = ""
+    val timeText: String = "",
+    val isFresh: Boolean = false
 )
 
 /**
@@ -114,6 +115,9 @@ fun LiveLocationLeafletMap(
                 .info-card .name { font-weight: 800; font-size: 1.05rem; color: #1e293b; margin: 0; display: block; }
                 .info-card .phone { font-size: 0.85rem; color: #64748b; font-weight: 500; display: block; margin-top: 1px; }
                 .info-card .time { font-size: 0.75rem; color: #2563eb; font-weight: 600; margin-top: 3px; display: block; }
+                .info-card .time.stale { color: #b45309; }
+                .profile-marker-pin.stale .profile-marker-avatar { border-color: #b45309; }
+                .profile-marker-pin.stale .profile-marker-arrow { border-top-color: #b45309; }
                 .btn-maps { display: block; margin-top: 12px; padding: 10px; background: #eff6ff; color: #2563eb; text-align: center; border-radius: 10px; text-decoration: none; font-weight: 800; font-size: 0.85rem; border: 1.5px solid #bfdbfe; }
             </style>
         </head>
@@ -161,7 +165,7 @@ fun LiveLocationLeafletMap(
                             var imgUrl = d.photoUrl || DEFAULT_AVATAR;
                             var icon = L.divIcon({
                                 className: '',
-                                html: '<div class="profile-marker-pin"><div class="profile-marker-avatar" style="background-image: url(\'' + imgUrl + '\')"></div><div class="profile-marker-arrow"></div></div>',
+                                html: '<div class="profile-marker-pin' + (d.isFresh ? '' : ' stale') + '"><div class="profile-marker-avatar" style="background-image: url(\'' + imgUrl + '\')"></div><div class="profile-marker-arrow"></div></div>',
                                 iconSize: [52, 60], iconAnchor: [26, 60], popupAnchor: [0, -55]
                             });
 
@@ -171,7 +175,7 @@ fun LiveLocationLeafletMap(
                                 '<div>' +
                                 '<span class="name">' + d.title + '</span>' +
                                 '<span class="phone">' + (d.phone || '-') + '</span>' +
-                                '<span class="time">' + d.timeText + '</span>' +
+                                '<span class="time' + (d.isFresh ? '' : ' stale') + '">' + d.timeText + '</span>' +
                                 '</div>' +
                                 '</div>' +
                                 '<a href="#" onclick="window.Android.openGoogleMaps(' + d.lat + ',' + d.lng + ');return false;" class="btn-maps">Buka Google Maps</a>' +

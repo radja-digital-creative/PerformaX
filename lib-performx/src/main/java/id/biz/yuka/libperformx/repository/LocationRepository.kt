@@ -1,14 +1,21 @@
 package id.biz.yuka.libperformx.repository
 
-import android.util.Log
 import id.biz.yuka.libperformx.SupabaseConfig
+import id.biz.yuka.libperformx.entity.UserLocationDetailEntity
 import id.biz.yuka.libperformx.request.RecordUserLocationRequest
 import id.biz.yuka.libperformx.utils.ResultState
-import id.biz.yuka.libperformx.utils.safeSupabaseCall
 import io.github.jan.supabase.gotrue.SessionStatus
 import io.github.jan.supabase.gotrue.auth
 import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.query.Columns
+import io.github.jan.supabase.postgrest.query.Order
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.OffsetDateTime
 
@@ -17,119 +24,116 @@ class LocationRepository {
     suspend fun recordUserLocation(
         latitude: Double,
         longitude: Double,
-        provider: String = "hybrid"
-    ): ResultState<Unit> {
-        return safeSupabaseCall {
-            // Tunggu sampai auth session selesai di-load dari storage (max 5 detik)
-            val sessionReady = withTimeoutOrNull(5_000L) {
-                SupabaseConfig.client.auth.sessionStatus.first { status ->
-                    status !is SessionStatus.LoadingFromStorage
-                }
+        provider: String = "hybrid",
+        recordedAt: String = OffsetDateTime.now().toString(),
+        expectedUserId: String? = null
+    ): ResultState<Unit> = locationCall("Gagal memperbarui lokasi. Silakan coba lagi.") {
+        val sessionReady = withTimeoutOrNull(5_000L) {
+            SupabaseConfig.client.auth.sessionStatus.first { status ->
+                status !is SessionStatus.LoadingFromStorage
             }
-            Log.d("LOCATION_REPO", "Session status setelah wait: $sessionReady")
-
-            val userId = SupabaseConfig.client.auth.currentUserOrNull()?.id
-            Log.d("LOCATION_REPO", "Memproses simpan lokasi. User ID: $userId")
-
-            if (userId.isNullOrEmpty()) {
-                Log.e("LOCATION_REPO", "User ID tidak ditemukan (null), tidak dapat menyimpan lokasi ke Supabase.")
-                error("Sesi login belum tersedia untuk memperbarui lokasi.")
-            }
-
-            val request = RecordUserLocationRequest(
-                userId = userId,
-                latitude = latitude,
-                longitude = longitude,
-                provider = provider,
-                recordedAt = OffsetDateTime.now().toString()
-            )
-
-            Log.d("LOCATION_REPO", "Mengirim payload ke Supabase: $request")
-            SupabaseConfig.client.postgrest["user_locations"].insert(request)
-            Log.d("LOCATION_REPO", "Berhasil insert lokasi ke tabel user_locations!")
-            Unit
         }
+        check(sessionReady != null) { "Sesi login belum tersedia." }
+        val userId = SupabaseConfig.client.auth.currentUserOrNull()?.id
+        check(!userId.isNullOrEmpty()) { "Sesi login belum tersedia." }
+        check(expectedUserId == null || expectedUserId == userId) { "Sesi login telah berubah." }
+
+        val request = RecordUserLocationRequest(
+            userId = userId,
+            latitude = latitude,
+            longitude = longitude,
+            provider = provider,
+            recordedAt = recordedAt
+        )
+        // Keep the captured identity in the payload; an account switch must never
+        // attribute this fix to a different user. The existing insert RLS still applies.
+        SupabaseConfig.client.postgrest["user_locations"].insert(request)
+        Unit
     }
 
-    /**
-     * Mengambil lokasi TERBARU dari seluruh karyawan beserta data profilnya.
-     */
-    suspend fun getLatestUserLocations(): ResultState<List<id.biz.yuka.libperformx.entity.UserLocationDetailEntity>> {
-        return safeSupabaseCall {
-            // 1. Ambil seluruh data lokasi, diurutkan terbaru dahulu
-            val rawLocations = SupabaseConfig.client.postgrest["user_locations"]
-                .select(columns = io.github.jan.supabase.postgrest.query.Columns.raw("user_id,latitude,longitude,recorded_at")) {
-                    order("recorded_at", order = io.github.jan.supabase.postgrest.query.Order.DESCENDING)
+    /** Latest visible location for every active non-owner profile, independent of history volume. */
+    suspend fun getLatestUserLocations(): ResultState<List<UserLocationDetailEntity>> =
+        locationCall("Gagal memuat lokasi karyawan. Silakan coba lagi.") {
+            val ownerRole = SupabaseConfig.client.postgrest["roles"]
+                .select(columns = Columns.raw("id")) {
+                    filter { eq("role_name", "owner") }
                 }
-                .decodeList<UserLocationRawResponse>()
+                .decodeSingleOrNull<RoleRawForLocation>()
+                ?: error("Role owner tidak tersedia.")
 
-            if (rawLocations.isEmpty()) {
-                return@safeSupabaseCall emptyList()
-            }
-
-            // 2. Ambil record TERBARU saja untuk setiap user_id
-            val latestLocationsByUser = mutableMapOf<String, UserLocationRawResponse>()
-            for (loc in rawLocations) {
-                if (!latestLocationsByUser.containsKey(loc.userId)) {
-                    latestLocationsByUser[loc.userId] = loc
-                }
-            }
-
-            val userIds = latestLocationsByUser.keys.toList()
-            if (userIds.isEmpty()) {
-                return@safeSupabaseCall emptyList()
-            }
-
-            // 3. Ambil role_id untuk 'owner' agar bisa di-exclude
-            val ownerRole = try {
-                SupabaseConfig.client.postgrest["roles"]
-                    .select { filter { eq("role_name", "owner") } }
-                    .decodeSingleOrNull<RoleRawForLocation>()
-            } catch (e: Exception) { null }
-
-            // Ambil data profil karyawan (exclude owner)
-            val profiles = SupabaseConfig.client.postgrest["profiles"]
-                .select(columns = io.github.jan.supabase.postgrest.query.Columns.raw("id,role_id,full_name,phone_number,profile_url")) {
-                    filter {
-                        isIn("id", userIds)
-                        if (ownerRole != null) {
+            val profiles = mutableListOf<UserProfileRawForLocation>()
+            var lastProfileId: String? = null
+            // Keyset pagination also works when PostgREST caps responses below our
+            // requested page size. Continue until an empty page, not a short page.
+            while (true) {
+                val cursor = lastProfileId
+                val page = SupabaseConfig.client.postgrest["profiles"]
+                    .select(columns = Columns.raw("id,full_name,phone_number,profile_url")) {
+                        filter {
                             neq("role_id", ownerRole.id)
+                            eq("is_active", true)
+                            if (cursor != null) gt("id", cursor)
                         }
-                        eq("is_active", true)
+                        order("id", order = Order.ASCENDING)
+                        limit(500)
                     }
-                }
-                .decodeList<UserProfileRawForLocation>()
+                    .decodeList<UserProfileRawForLocation>()
+                if (page.isEmpty()) break
+                profiles.addAll(page)
+                lastProfileId = page.last().id
+            }
 
-            val profileMap = profiles.associateBy { it.id }
-
-            // 4. Susun daftar UserLocationDetailEntity (hanya karyawan aktif non-owner)
-            latestLocationsByUser.values
-                .filter { loc -> profileMap.containsKey(loc.userId) }
-                .map { loc ->
-                    val profile = profileMap[loc.userId]!!
-                    id.biz.yuka.libperformx.entity.UserLocationDetailEntity(
-                        userId = loc.userId,
-                        fullName = profile.fullName ?: "Karyawan",
-                        phoneNumber = profile.phoneNumber ?: "-",
-                        profileUrl = profile.profileUrl ?: "",
-                        latitude = loc.latitude,
-                        longitude = loc.longitude,
-                        recordedAt = loc.recordedAt ?: ""
-                    )
-                }
+            val requests = Semaphore(3)
+            coroutineScope {
+                profiles.map { profile ->
+                    async {
+                        requests.withPermit {
+                            // Query each user's newest row directly. A frequently
+                            // reporting device cannot crowd quieter users out.
+                            val location = SupabaseConfig.client.postgrest["user_locations"]
+                                .select(columns = Columns.raw("user_id,latitude,longitude,recorded_at")) {
+                                    filter { eq("user_id", profile.id) }
+                                    order("recorded_at", order = Order.DESCENDING)
+                                    limit(1)
+                                }
+                                .decodeSingleOrNull<UserLocationRawResponse>()
+                            location?.let {
+                                UserLocationDetailEntity(
+                                    userId = it.userId,
+                                    fullName = profile.fullName ?: "Karyawan",
+                                    phoneNumber = profile.phoneNumber ?: "-",
+                                    profileUrl = profile.profileUrl ?: "",
+                                    latitude = it.latitude,
+                                    longitude = it.longitude,
+                                    recordedAt = it.recordedAt ?: ""
+                                )
+                            }
+                        }
+                    }
+                }.awaitAll().filterNotNull()
+            }
         }
-    }
+
+    // Do not log transport exceptions: they may include coordinates or auth headers.
+    // A failed per-user query fails the entire refresh, preserving the caller's last
+    // complete marker set instead of silently presenting a partial success.
+    private suspend fun <T> locationCall(message: String, block: suspend () -> T): ResultState<T> =
+        try {
+            ResultState.Success(block())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            ResultState.Error(message)
+        }
 }
 
 @kotlinx.serialization.Serializable
 private data class RoleRawForLocation(
-    @kotlinx.serialization.SerialName("id") val id: Int,
-    @kotlinx.serialization.SerialName("role_name") val roleName: String
+    @kotlinx.serialization.SerialName("id") val id: Int
 )
 
 @kotlinx.serialization.Serializable
 private data class UserLocationRawResponse(
-    @kotlinx.serialization.SerialName("id") val id: String = "",
     @kotlinx.serialization.SerialName("user_id") val userId: String,
     @kotlinx.serialization.SerialName("latitude") val latitude: Double,
     @kotlinx.serialization.SerialName("longitude") val longitude: Double,
@@ -139,10 +143,7 @@ private data class UserLocationRawResponse(
 @kotlinx.serialization.Serializable
 private data class UserProfileRawForLocation(
     @kotlinx.serialization.SerialName("id") val id: String,
-    @kotlinx.serialization.SerialName("role_id") val roleId: Int? = null,
     @kotlinx.serialization.SerialName("full_name") val fullName: String? = null,
     @kotlinx.serialization.SerialName("phone_number") val phoneNumber: String? = null,
     @kotlinx.serialization.SerialName("profile_url") val profileUrl: String? = null
 )
-
-

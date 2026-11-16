@@ -28,6 +28,11 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var uiEventManager: UiEventManager
 
+    override fun onStart() {
+        super.onStart()
+        id.biz.yuka.performax.service.LiveLocationTracking.resumeIfEnabled(this)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)

@@ -75,6 +75,7 @@ fun LiveLocationScreen(
         android.util.Log.d("LiveLocationScreen", "Total Karyawan: ${locationList.size}, Valid Lokasi: ${filtered.size}")
         
         filtered.map { item ->
+            val status = viewModel.locationStatus(item.recordedAt)
             LiveLocationMapMarker(
                 userId = item.userId,
                 lat = item.latitude,
@@ -82,7 +83,8 @@ fun LiveLocationScreen(
                 title = item.fullName,
                 photoUrl = item.profileUrl,
                 phone = item.phoneNumber,
-                timeText = viewModel.formatRelativeTime(item.recordedAt)
+                timeText = status.label,
+                isFresh = status.isFresh
             )
         }
     }
@@ -227,6 +229,7 @@ fun LiveLocationScreen(
                             contentPadding = PaddingValues(bottom = 24.dp)
                         ) {
                             items(locationList) { item ->
+                                val locationStatus = viewModel.locationStatus(item.recordedAt)
                                 val isSelected = selectedUserId == item.userId
                                 val isItemRefreshing = refreshingUserId == item.userId
 
@@ -277,9 +280,9 @@ fun LiveLocationScreen(
                                         )
                                         Spacer(modifier = Modifier.height(2.dp))
                                         Text(
-                                            text = "🕒 ${viewModel.formatRelativeTime(item.recordedAt)}",
+                                            text = "🕒 ${locationStatus.label}",
                                             style = MaterialTheme.typography.labelSmall.copy(
-                                                color = WonderOrange,
+                                                color = if (locationStatus.isFresh) Color(0xFF2563EB) else Color(0xFFB45309),
                                                 fontWeight = FontWeight.SemiBold
                                             )
                                         )
