@@ -57,7 +57,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 Log.e("FCM_DEBUG", "Gagal parsing JSON payload: ${e.message}")
             }
         }
-        if (incomingType == "REQUEST_LIVE_LOCATION" || message.data["type"] == "REQUEST_LIVE_LOCATION") {
+        if (incomingType == "REQUEST_LIVE_LOCATION" || incomingType == "REQUEST_LOCATION") {
 
             if (LocationForegroundService.isRunning) {
                 return
@@ -67,6 +67,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 val serviceIntent = Intent(this, LocationForegroundService::class.java)
                 ContextCompat.startForegroundService(this, serviceIntent)
             } catch (e: Exception) {
+                Log.w("LOCATION_REFRESH", "Layanan lokasi ditolak Android: ${e.javaClass.simpleName}")
             }
             return
         }

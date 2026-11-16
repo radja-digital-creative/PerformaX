@@ -37,7 +37,7 @@ class LocationRefreshHelper {
                         put("message", "Meminta pembaruan lokasi presisi...")
                         putJsonObject("payload") {
                             put("id", userId)
-                            put("type", "REQUEST_LOCATION")
+                            put("type", "REQUEST_LIVE_LOCATION")
                             put("silent", "true")
                         }
                     }
