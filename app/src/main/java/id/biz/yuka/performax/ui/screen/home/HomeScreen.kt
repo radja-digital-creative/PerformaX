@@ -15,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import id.biz.yuka.performax.service.LiveLocationTracking
 import androidx.compose.ui.Alignment
@@ -69,11 +70,14 @@ fun HomeScreen(
         }
     }
 
-    var selectedTab by remember { mutableIntStateOf(1) } // 0: Insight, 1: Operasional, 2: Growth
+    var selectedTab by rememberSaveable { mutableIntStateOf(1) } // 0: Insight, 1: Operasional, 2: Growth
+    // Read selection during composition, never again inside the deferred LazyColumn DSL.
+    // Otherwise the DSL can observe the new tab with the previous composition's null ViewModel.
+    val renderedTab = selectedTab
     // ViewModels start network work in init: create only the visible tab.
-    val operasionalViewModel = if (selectedTab == 1) hiltViewModel<OperasionalViewModel>() else null
-    val insightViewModel = if (selectedTab == 0) hiltViewModel<InsightViewModel>() else null
-    val growthViewModel = if (selectedTab == 2) hiltViewModel<GrowthViewModel>() else null
+    val operasionalViewModel = if (renderedTab == 1) hiltViewModel<OperasionalViewModel>() else null
+    val insightViewModel = if (renderedTab == 0) hiltViewModel<InsightViewModel>() else null
+    val growthViewModel = if (renderedTab == 2) hiltViewModel<GrowthViewModel>() else null
     val pullToRefreshState = rememberPullToRefreshState()
     val currentWarning = viewModel.currentWarning
     val isAnyLoading = viewModel.isLoading || operasionalViewModel?.isLoading == true ||
@@ -198,16 +202,16 @@ fun HomeScreen(
                     // 2. Sticky Tab Switcher
                     stickyHeader {
                         WonderTabSwitcher(
-                            selectedTab = selectedTab,
+                            selectedTab = renderedTab,
                             onTabSelected = { selectedTab = it }
                         )
                     }
 
                     // 3. Tab Content
-                    when (selectedTab) {
-                        0 -> insightTab(insightViewModel!!, onNavigateToMenu)
-                        1 -> operasionalTab(operasionalViewModel!!, onNavigateToMenu)
-                        2 -> growthTab(growthViewModel!!, onNavigateToMenu)
+                    when (renderedTab) {
+                        0 -> insightViewModel?.let { insightTab(it, onNavigateToMenu) }
+                        1 -> operasionalViewModel?.let { operasionalTab(it, onNavigateToMenu) }
+                        2 -> growthViewModel?.let { growthTab(it, onNavigateToMenu) }
                     }
                 }
             }
