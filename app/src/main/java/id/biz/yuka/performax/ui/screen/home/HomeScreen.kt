@@ -500,15 +500,15 @@ fun WonderTabSwitcher(selectedTab: Int, onTabSelected: (Int) -> Unit) {
                         .fillMaxHeight()
                         .padding(vertical = 4.dp, horizontal = 4.dp)
                         .clip(RoundedCornerShape(16.dp))
-                        .background(if (renderedTab == index) WonderLime else Color.Transparent)
+                        .background(if (selectedTab == index) WonderLime else Color.Transparent)
                         .clickable { onTabSelected(index) },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = title,
                         style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = if (renderedTab == index) FontWeight.Bold else FontWeight.Normal,
-                            color = if (renderedTab == index) Color.Black else WonderGrey,
+                            fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal,
+                            color = if (selectedTab == index) Color.Black else WonderGrey,
                             fontSize = 14.sp
                         )
                     )
