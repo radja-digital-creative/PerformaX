@@ -16,6 +16,9 @@ import id.biz.yuka.libperformx.request.RegisterEmployeeRequest
 import id.biz.yuka.libperformx.request.UserStoreRequest
 import id.biz.yuka.libperformx.utils.ResultState
 import kotlinx.coroutines.launch
+import id.biz.yuka.libperformx.SupabaseConfig
+import io.github.jan.supabase.gotrue.auth
+import id.biz.yuka.performax.ui.screen.account.AccountAccessPolicy
 import java.util.UUID
 import javax.inject.Inject
 
@@ -45,6 +48,8 @@ class EmployeeCreateViewModel @Inject constructor(
     var address by mutableStateOf("")
     var gender by mutableStateOf("male")
     var roleId by mutableStateOf(4)
+    var allowedRoles by mutableStateOf<List<Pair<Int, String>>>(emptyList())
+        private set
 
     // Form Finansial
     var payrollType by mutableStateOf("monthly")
@@ -64,6 +69,16 @@ class EmployeeCreateViewModel @Inject constructor(
     var selectedDeductionIds = mutableStateListOf<String>()
 
     init {
+        viewModelScope.launch {
+            val userId = SupabaseConfig.client.auth.currentUserOrNull()?.id
+            if (userId != null) {
+                when (val result = employeeRepository.getEmployeeById(userId)) {
+                    is ResultState.Success -> allowedRoles = AccountAccessPolicy.creatableRoles(result.data.roleName)
+                    is ResultState.Error -> errorMessage = result.message
+                }
+            }
+            if (allowedRoles.isEmpty()) errorMessage = "Hanya Owner dan Manager dapat membuat akun."
+        }
         fetchStores()
         fetchDeductions()
     }
@@ -123,6 +138,11 @@ class EmployeeCreateViewModel @Inject constructor(
     }
 
     fun createEmployee() {
+        if (isLoading) return
+        if (allowedRoles.none { it.first == roleId }) {
+            errorMessage = "Anda tidak memiliki izin untuk membuat jabatan ini."
+            return
+        }
         if (email.isBlank() || password.isBlank() || fullName.isBlank()) {
             errorMessage = "Email, Password, dan Nama Lengkap wajib diisi!"
             return

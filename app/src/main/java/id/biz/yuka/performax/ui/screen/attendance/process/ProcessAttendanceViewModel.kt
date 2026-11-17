@@ -74,8 +74,12 @@ class ProcessAttendanceViewModel @Inject constructor(
     var isFaceTimeout by mutableStateOf(false)
     var pendingTasks by mutableStateOf<List<TaskEntity>>(emptyList())
     var completedTasks by mutableStateOf<List<TaskEntity>>(emptyList())
-    var hasApprovedOffsite by mutableStateOf(false)
-    var hasApprovedShiftBypass by mutableStateOf(false)
+    var exceptionAccess by mutableStateOf(AttendanceExceptionAccess())
+        private set
+    val hasOffsiteAccess get() = exceptionAccess.allowsOffsite
+    val hasShiftExceptionAccess get() = if (currentAttendanceType == "check_in")
+        exceptionAccess.allowsLateArrival else exceptionAccess.allowsEarlyDeparture
+    val hasPendingException get() = exceptionAccess.hasPendingFor(currentAttendanceType)
     var hasPendingRequestToday by mutableStateOf(false)
 
     // --- State Absen Manual ---
@@ -131,8 +135,7 @@ class ProcessAttendanceViewModel @Inject constructor(
             attendanceState = "LOADING"
             globalErrorMessage = null
             hasPendingRequestToday = false
-            hasApprovedOffsite = false
-            hasApprovedShiftBypass = false
+            exceptionAccess = AttendanceExceptionAccess()
             isVerificationStarted = false
             isLocationReady = false
 
@@ -218,23 +221,14 @@ class ProcessAttendanceViewModel @Inject constructor(
                     }
                     activeScheduleId = schedule.id
 
-                    // Cek Izin Luar Radius (Offsite) & Bypass Shift berdasarkan schedule.id
-                    try {
-                        val offsiteRes = attendanceRepository.checkHasApprovedOffsiteRequest(userId, schedule.id)
-                        if (offsiteRes is ResultState.Success && offsiteRes.data) {
-                            hasApprovedOffsite = true
+                    // Pending exceptions permit attendance; approval and deductions remain server-owned.
+                    when (val access = attendanceRepository.getAttendanceExceptionAccess(userId, schedule.id)) {
+                        is ResultState.Success -> exceptionAccess = access.data
+                        is ResultState.Error -> {
+                            attendanceState = "TIME_ERROR"
+                            timeErrorMessage = "Gagal memuat pengajuan izin: ${access.message}"
+                            return@launch
                         }
-                    } catch (e: Exception) {
-                        Log.e("Absensi", "Gagal cek izin offsite: ${e.message}")
-                    }
-
-                    try {
-                        val bypassRes = attendanceRepository.checkHasApprovedShiftBypassRequest(userId, schedule.id)
-                        if (bypassRes is ResultState.Success && bypassRes.data) {
-                            hasApprovedShiftBypass = true
-                        }
-                    } catch (e: Exception) {
-                        Log.e("Absensi", "Gagal cek izin shift bypass: ${e.message}")
                     }
 
                     val storeDetail = when (val storeRes = storeRepository.getStoreDetail(schedule.storeId)) {
@@ -272,7 +266,7 @@ class ProcessAttendanceViewModel @Inject constructor(
                     val timeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
                     if (attData == null) {
-                        if (id.biz.yuka.performax.utils.AttendancePolicy.canAttend(currentTime, checkInStart, checkInEnd, allowAnyTime) || hasApprovedShiftBypass) {
+                        if (id.biz.yuka.performax.utils.AttendancePolicy.canAttend(currentTime, checkInStart, checkInEnd, allowAnyTime) || (exceptionAccess.allowsLateArrival && currentTime.isAfter(checkInEnd))) {
                             currentAttendanceType = "check_in"
                             attendanceState = "CAMERA"
                             overlayMessage = "Mencari lokasi presisi GPS..."
@@ -286,11 +280,11 @@ class ProcessAttendanceViewModel @Inject constructor(
                             attendanceState = "COMPLETED"
                             return@launch
                         } else {
-                            if (currentTime.isBefore(checkOutStart) && !hasApprovedShiftBypass && !allowAnyTime) {
+                            if (currentTime.isBefore(checkOutStart) && !exceptionAccess.allowsEarlyDeparture && !allowAnyTime) {
                                 expectedCheckOutTime = checkOutStart.format(timeFormatter)
                                 attendanceState = "CHECKED_IN_ONLY"
                                 return@launch
-                            } else if (id.biz.yuka.performax.utils.AttendancePolicy.canAttend(currentTime, checkOutStart, checkOutEnd, allowAnyTime) || hasApprovedShiftBypass) {
+                            } else if (id.biz.yuka.performax.utils.AttendancePolicy.canAttend(currentTime, checkOutStart, checkOutEnd, allowAnyTime) || (exceptionAccess.allowsEarlyDeparture && currentTime.isBefore(checkOutStart))) {
                                 currentAttendanceType = "check_out"
                                 loadPendingTasks(userId)
                             } else {
@@ -351,15 +345,15 @@ class ProcessAttendanceViewModel @Inject constructor(
         if (targetStore == null || activeScheduleId == null || attendanceState != "CAMERA" || isUploadLoading || uploadSuccess) return
 
         val distance = calculateDistance(lat, lng, targetStore.lat, targetStore.lng)
-        isLocationReady = distance <= maxRadiusMeters || hasApprovedOffsite
+        isLocationReady = distance <= maxRadiusMeters || hasOffsiteAccess
         if (!requirePhoto) {
             overlayMessage = if (isLocationReady) "Lokasi siap. Tekan tombol absen." else "Anda di luar radius (${distance.toInt()} m)."
             return
         }
         if (!isVerificationStarted || overlayMessage.contains("luar radius") || overlayMessage.contains("Mencari")) {
-            if (distance <= maxRadiusMeters || hasApprovedOffsite) {
+            if (distance <= maxRadiusMeters || hasOffsiteAccess) {
                 isVerificationStarted = true
-                if (hasApprovedOffsite && distance > maxRadiusMeters) {
+                if (hasOffsiteAccess && distance > maxRadiusMeters) {
                     overlayMessage = "Izin Absen Luar Radius Ditemukan\nMenyiapkan Kamera..."
                 }
                 startVerificationFlow()

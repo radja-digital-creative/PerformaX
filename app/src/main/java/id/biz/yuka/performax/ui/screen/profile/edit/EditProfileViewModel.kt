@@ -33,6 +33,40 @@ class EditProfileViewModel @Inject constructor(
     var isLoading by mutableStateOf(false)
     var errorMessage by mutableStateOf<String?>(null)
 
+    var currentEmail by mutableStateOf("")
+        private set
+    var editEmail by mutableStateOf("")
+    var editPassword by mutableStateOf("")
+    var isSavingAccount by mutableStateOf(false)
+        private set
+    var accountMessage by mutableStateOf<String?>(null)
+
+    fun saveAccount() {
+        if (isSavingAccount) return
+        val userId = authRepository.getCurrentUserId() ?: return
+        val email = editEmail.trim().takeIf { it.isNotBlank() }
+        val password = editPassword.takeIf { it.isNotBlank() }
+        if (email == null && password == null) return
+        viewModelScope.launch {
+            isSavingAccount = true
+            accountMessage = null
+            try {
+                when (val result = employeeRepository.updateEmployeeCredentials(userId, email, password)) {
+                    is ResultState.Success -> {
+                        editEmail = ""
+                        editPassword = ""
+                        accountMessage = "Akun diperbarui. Jika diminta, konfirmasikan email baru melalui tautan email."
+                        when (val refreshed = employeeRepository.getEmployeeAccountEmail(userId)) {
+                            is ResultState.Success -> currentEmail = refreshed.data
+                            is ResultState.Error -> accountMessage = refreshed.message
+                        }
+                    }
+                    is ResultState.Error -> accountMessage = result.message
+                }
+            } finally { isSavingAccount = false }
+        }
+    }
+
     // Form State
     var editFullName by mutableStateOf("")
     var editPhoneNumber by mutableStateOf("")
@@ -52,6 +86,10 @@ class EditProfileViewModel @Inject constructor(
             isLoading = true
             val userId = authRepository.getCurrentUserId()
             if (userId != null) {
+                when (val account = employeeRepository.getEmployeeAccountEmail(userId)) {
+                    is ResultState.Success -> currentEmail = account.data
+                    is ResultState.Error -> accountMessage = account.message
+                }
                 val result = employeeRepository.getEmployeeById(userId)
                 if (result is ResultState.Success) {
                     val profile = result.data

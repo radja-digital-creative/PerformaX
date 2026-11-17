@@ -233,19 +233,16 @@ fun EmployeeDetailScreen(
                 // ==========================================
                 // 2. KARTU AKUN (Khusus Edit)
                 // ==========================================
-                if (viewModel.isEditMode && viewModel.isOwner) {
+                if (viewModel.canEditCredentials) {
                     item {
                         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Security, null, tint = WonderOrange)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Akun & Keamanan", fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleMedium)
-                                }
-                                Spacer(modifier = Modifier.height(16.dp))
-                                OutlinedTextField(value = viewModel.editEmail, onValueChange = { viewModel.editEmail = it }, label = { Text("Email Baru (Opsional)") }, placeholder = { Text("Biarkan kosong jika tidak diubah") }, modifier = Modifier.fillMaxWidth())
-                                Spacer(modifier = Modifier.height(8.dp))
-                                OutlinedTextField(value = viewModel.editPassword, onValueChange = { viewModel.editPassword = it }, label = { Text("Password Baru (Opsional)") }, placeholder = { Text("Biarkan kosong jika tidak diubah") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                                id.biz.yuka.performax.ui.screen.account.AccountSecurityFields(
+                                    currentEmail = viewModel.currentEmail,
+                                    email = viewModel.editEmail, onEmailChange = { viewModel.editEmail = it },
+                                    password = viewModel.editPassword, onPasswordChange = { viewModel.editPassword = it },
+                                    saving = viewModel.isSavingAccount, onSave = viewModel::saveAccount
+                                )
                             }
                         }
                     }

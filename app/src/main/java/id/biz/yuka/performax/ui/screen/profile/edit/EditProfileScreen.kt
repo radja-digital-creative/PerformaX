@@ -8,6 +8,8 @@ import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -80,11 +82,23 @@ fun EditProfileScreen(
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             Crossfade(targetState = viewModel.currentStep, label = "Stepper") { step ->
                 Column(
-                    modifier = Modifier.fillMaxSize().padding(16.dp),
+                    modifier = Modifier.fillMaxSize().padding(16.dp).then(if (step == 1) Modifier.verticalScroll(rememberScrollState()) else Modifier),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     when (step) {
                         1 -> { // STEP 1: DATA DIRI
+                            Card(colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth()) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    id.biz.yuka.performax.ui.screen.account.AccountSecurityFields(
+                                        currentEmail = viewModel.currentEmail,
+                                        email = viewModel.editEmail, onEmailChange = { viewModel.editEmail = it },
+                                        password = viewModel.editPassword, onPasswordChange = { viewModel.editPassword = it },
+                                        saving = viewModel.isSavingAccount, onSave = viewModel::saveAccount
+                                    )
+                                    viewModel.accountMessage?.let { Text(it, modifier = Modifier.padding(top = 8.dp)) }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
                             Card(colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth()) {
                                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                     Text("Informasi Data Diri", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
