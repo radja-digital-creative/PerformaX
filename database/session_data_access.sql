@@ -51,7 +51,11 @@ begin
       using ((select coalesce((public.current_account_access()->>'active')::boolean,false)))
       with check ((select coalesce((public.current_account_access()->>'active')::boolean,false)))
     $policy$,t.nspname,t.relname);
-    execute format('alter table %I.%I enable row level security',t.nspname,t.relname);
+    -- Storage may be owned by supabase_storage_admin. Policy management is
+    -- delegated separately; already-enabled RLS needs no owner-only ALTER.
+    if not t.relrowsecurity then
+      execute format('alter table %I.%I enable row level security',t.nspname,t.relname);
+    end if;
   end loop;
 end;
 $$;

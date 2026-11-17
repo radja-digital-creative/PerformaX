@@ -22,6 +22,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify backend account contracts
+        run: node --experimental-transform-types tests/test_employee_account.mjs
       - name: Verify app tests and compile draft
         run: bash ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
       # lib-performx integration tests access production; never run them in CI.
@@ -45,4 +50,11 @@ jobs:
           name: PerformaX-7.2.5-candidate-needs-existing-signer
           path: app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
           if-no-files-found: error
+          retention-days: 3
+      - name: Preserve SDK signing utility
+        run: cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" apksigner.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-sdk-signing-utility
+          path: apksigner.jar
           retention-days: 3

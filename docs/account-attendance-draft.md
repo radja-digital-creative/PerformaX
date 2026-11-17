@@ -1,25 +1,25 @@
-# Account and attendance changes — deployment blocked
+# Account and attendance release 7.2.5
 
-Status: Android draft compiles; backend SQL and Edge code are NOT deployed. Do not distribute its APK. Current main remains the released 7.2.4.
+Backend deployed on the self-hosted PerformaX stack on 2026-11-17 after an isolated database restore, SQL regression tests, real Auth/REST/Edge integration tests, and a production transaction dry run. Android builds through GitHub Actions; the candidate must be re-signed using the existing private keystore before distribution. Never commit that key.
 
-Requested behavior:
+Behavior:
 - Pending outside-radius, late-arrival and early-departure requests permit the matching attendance action. Manager/Owner decisions remain separate.
+- Only approved, direction-matching exceptions waive KPI/payroll consequences. A later rejection restores the original monetary penalty. No deployment-time historical backfill is performed.
 - Current email is visible to self/Owner; only a newly entered password is revealable.
-- Owner creates Owner/Manager/Admin/Staff; Manager creates Staff only.
-- Disabled accounts lose login and existing-session access.
+- Owner creates Owner/Manager/Admin/Staff; Manager creates Staff in assigned stores only.
+- Disabled accounts lose login, refresh, REST/Edge and authenticated table access. The Android foreground gate checks every 30 seconds and on resume.
 
-Implemented client contracts:
-- `current_account_access()` -> `{active:boolean}` is required for login/resume and foreground polling.
-- `get_attendance_exception_access(p_user_id,p_schedule_id)` -> status fields is required for attendance.
-- `employee-account` Edge endpoint handles create, get_email, update_credentials and disable.
+Backend:
+- Apply database/account_access.sql, database/pending_attendance_access.sql, database/session_data_access.sql in one transaction. Preserve any existing PostgREST pre-request hook before installing public.require_active_account.
+- Deploy functions/_shared together with employee-account, create_user_admin and update_user_admin. Install the runtime gate with supabase/install_runtime_gate.py against the existing functions directory; restart Edge runtime.
+- Preserve backups before changing live functions or database objects.
 
-Verified: initial Android build + 24 app unit tests passed. Password-retention review fix receives another build/test pass. No live employee accounts/passwords/attendance were changed.
+Verification:
+- App unit tests and Android compilation run in .github/workflows/android-draft.yml.
+- node --experimental-transform-types tests/test_employee_account.mjs: 15 mocked endpoint contract/security cases.
+- tests/account_access_regression.sql: role scope, legacy/direct escalation denial, revocation, existing JWT rejection.
+- database/tests/pending_attendance_access.sql: pending direction access, early checkout gate, approval/rejection/deletion KPI restoration, monetary penalty restoration, preserved timestamps.
+- tests/session_data_access_regression.sql: authenticated-role valid/revoked/inactive session table reads.
+- Real isolated Auth/REST/Edge integration: owner creates owner/manager, manager creates staff and cannot create owner/manager, self profile edit, owner credential change/new login, disable and stale-token/login denial.
 
-Blocking server work:
-1. Obtain deployment access to the self-hosted Capsule Cloud functions runtime. Studio currently exposes function inventory but no source edit/deploy controls; connected HostData server hosts other projects, not this stack.
-2. Read and back up current create_user_admin/update_user_admin source; secure or replace legacy paths so old clients cannot bypass new role/credential rules.
-3. Validate account_access.sql on staging, retain existing PostgREST hooks, enforce disabled-session access on Storage/Realtime/other Edge endpoints as appropriate.
-4. Validate pending_attendance_access.sql exact anchors against installed process_attendance. Complete retrospective approval/rejection reconciliation for attendance statuses, KPI and payroll; the existing approval trigger only creates legacy bypass rows.
-5. Exercise owner/manager/staff scope, disable with an existing token, pending attendance then approval/rejection, email/password update, and device lifecycle tests. Then deploy server, bump APK version, rebuild/sign and release.
-
-Prepared SQL is deliberately labelled a draft; do not apply blindly or claim the requested end-to-end behavior is live.
+Limits: physical Android device testing remains required. Existing signed Storage URLs last until expiry, previously downloaded data cannot be revoked, and anonymous access policies are unchanged. Legacy direct attendance timestamp mutation is a separate security audit; this change enforces the attendance RPC gates and prevents client self-approval of exceptions. Future database tables need the session policy too.
